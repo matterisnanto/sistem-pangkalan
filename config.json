@@ -1,0 +1,23 @@
+{
+    "apiBaseUrl": "https://api-map.my-pertamina.id",
+    "filePaths": {
+      "inputFileTransaksi": "input/inputpenjualan.xlsx",
+      "masterLogTransaksi": "output/MASTER_LOG_TRANSAKSI_MULTI.xlsx",
+      "inputFileCekKuota": "input/cekkuota.xlsx",
+      "masterLogCekKuota": "output/MASTER_LOG_CEK_KUOTA.xlsx",
+      "tokenCache": ".token_cache.json",
+      "rencanaTransaksi": "input/rencana_transaksi.xlsx"
+    },
+    "aturanBisnis": {
+      "batasPerPangkalan": 4,
+      "batasUsahaMikro": 15
+    },
+    "jeda": {
+      "transaksi": { "minDetik": 15, "maksDetik": 45 },
+      "cekKuota": { "minDetik": 5, "maksDetik": 15 }
+    },
+    "retry": {
+      "jumlah": 2,
+      "jedaDetik": 5
+    }
+  }
