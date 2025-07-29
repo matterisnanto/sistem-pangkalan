@@ -112,12 +112,20 @@ async function runTambahPelangganBaru(token) {
 
         const verificationData = await api.getVerificationData(nik, token);
         if (verificationData) {
+            // [PERBAIKAN] Langsung ambil data kuota saat verifikasi berhasil
+            const quota = await api.getQuota(nik, verificationData, token);
+            
             const custType = verificationData.customerTypes?.[0]?.name || 'N/A';
             dataPelanggan.push({
                 noKTP: nik,
                 nama: verificationData.name,
                 customerTypes: custType,
                 tanggal_terakhir_transaksi: 'Belum Pernah Transaksi',
+                // --- [DATA KUOTA BARU DITAMBAHKAN] ---
+                daily: quota?.daily ?? 0,
+                monthly: quota?.monthly ?? 0,
+                family: quota?.family ?? 'N/A',
+                all: quota?.all ?? 0
             });
             pelangganSet.add(nik);
             summary['Baru Ditambahkan']++;
@@ -126,7 +134,6 @@ async function runTambahPelangganBaru(token) {
             summary['Verifikasi Gagal']++;
         }
 
-        // --- [PERBAIKAN] Menambahkan jeda di setiap iterasi ---
         if (index < dataPelangganBaru.length - 1) {
             await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
         }
@@ -142,7 +149,7 @@ async function runTambahPelangganBaru(token) {
 
     ui.tampilkanTabelRingkasan(summary, "Ringkasan Penambahan Pelanggan");
     console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
-}
+}                                                                                                                                  
 
 // -----------------------------------------------------------------------------
 // --- FUNGSI-FUNGSI MODE CERDAS ---
@@ -261,17 +268,35 @@ async function buatRencanaTransaksi(token, profile) {
     for (const [index, pelanggan] of kandidatPelanggan.entries()) {
         progressBar.increment();
         const nik = String(pelanggan.noKTP);
-        const verificationData = await api.getVerificationData(nik, token);
-        if (verificationData) {
-            const quota = await api.getQuota(nik, verificationData, token);
-            if (quota) {
-                pelanggan.daily = quota.daily; 
-                pelanggan.monthly = quota.monthly;
-                pelanggan.family = quota.family; 
-                pelanggan.all = quota.all;
-                
-                if (quota.monthly > 0) {
-                    eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
+        let isDataFresh = false;
+        if (pelanggan.terakhir_dicek) {
+            const lastCheckedDate = new Date(pelanggan.terakhir_dicek);
+            const hoursDiff = (new Date() - lastCheckedDate) / (1000 * 60 * 60);
+            if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) {
+                isDataFresh = true;
+            }
+        }
+
+        if (isDataFresh) {
+            // Jika data masih baru, percaya pada cache dan langsung loloskan
+            if (pelanggan.monthly > 0) {
+                eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
+            }
+        } else {
+            // Jika data sudah basi atau tidak ada, baru hubungi API
+            const verificationData = await api.getVerificationData(nik, token);
+            if (verificationData) {
+                const quota = await api.getQuota(nik, verificationData, token);
+                if (quota) {
+                    pelanggan.daily = quota.daily; 
+                    pelanggan.monthly = quota.monthly;
+                    pelanggan.family = quota.family; 
+                    pelanggan.all = quota.all;
+                    pelanggan.terakhir_dicek = new Date().toISOString(); // Update stempel waktu
+                    
+                    if (quota.monthly > 0) {
+                        eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
+                    }
                 }
             }
         }
@@ -577,6 +602,7 @@ async function runCekAndUpdateKuotaPelanggan(token) {
                 pelanggan.monthly = quota.monthly;
                 pelanggan.family = quota.family;
                 pelanggan.all = quota.all;
+                pelanggan.terakhir_dicek = new Date().toISOString();
             }
         }
         await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);

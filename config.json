@@ -13,7 +13,8 @@
     },
     "aturanBisnis": {
       "batasPerPangkalan": 4,
-      "batasUsahaMikro": 15
+      "batasUsahaMikro": 15,
+      "masaBerlakuCacheKuotaJam": 24
     },
     "jeda": {
       "transaksi": { "minDetik": 15, "maksDetik": 45 },
