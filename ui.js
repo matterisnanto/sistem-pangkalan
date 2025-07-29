@@ -77,12 +77,14 @@ const tampilkanMenuUtama = () => inquirerInstance.prompt([{
         { name: '4. Transaksi Langsung (On-The-Spot)', value: '4' },
         { name: '5. Input Transaksi Manual (dari File)', value: '5' },
         new inquirerInstance.Separator(chalkInstance.bold.cyan('--- Utilitas & Laporan ---')),
-        { name: '6. Perbarui Kuota Seluruh Pelanggan', value: '6' },
-        { name: '7. Tampilkan Laporan Penjualan Bulan Ini', value: '7' },
-        { name: '8. Buat File Template Input', value: '8' },
+        { name: '6. Tambah Pelanggan Baru dari File', value: '6' },
+        { name: '7. Buat/Update Master Pelanggan', value: '7' },
+        { name: '8. Perbarui Kuota Seluruh Pelanggan', value: '8' },
+        { name: '9. Tampilkan Laporan Penjualan Bulan Ini', value: '9' },
+        { name: '10. Buat File Template Input', value: '10' },
         new inquirerInstance.Separator(),
-        { name: '9. Ganti Token / Pangkalan', value: '9' },
-        { name: '10. Keluar', value: '10' },
+        { name: '11. Ganti Token / Pangkalan', value: '11' },
+        { name: '12. Keluar', value: '12' },
     ]
 }]);
 

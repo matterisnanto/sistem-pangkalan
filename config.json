@@ -3,10 +3,13 @@
     "filePaths": {
       "inputFileTransaksi": "input/inputpenjualan.xlsx",
       "masterLogTransaksi": "output/MASTER_LOG_TRANSAKSI_MULTI.xlsx",
+      "masterPelanggan": "output/MASTER_PELANGGAN.xlsx",
       "inputFileCekKuota": "input/cekkuota.xlsx",
       "masterLogCekKuota": "output/MASTER_LOG_CEK_KUOTA.xlsx",
+      "inputFilePelangganBaru": "input/pelanggan_baru.xlsx",
       "tokenCache": ".token_cache.json",
-      "rencanaTransaksi": "input/rencana_transaksi.xlsx"
+      "rencanaTransaksi": "input/rencana_transaksi.xlsx",
+      "rencanaTambahan": "input/rencana_tambahan.xlsx"
     },
     "aturanBisnis": {
       "batasPerPangkalan": 4,

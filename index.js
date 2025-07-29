@@ -23,6 +23,51 @@ const jeda = (minDetik, maksDetik) => {
     return new Promise(resolve => setTimeout(resolve, durasi));
 };
 
+async function runBuatMasterPelanggan() {
+    const startTime = Date.now();
+    console.log(chalk.bold.yellow("\n--- [Utilitas] Membuat/Memperbarui Master Pelanggan ---"));
+
+    console.log(chalk.blue("1. Memindai seluruh data transaksi dari semua pangkalan..."));
+    const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
+
+    const pelangganMap = new Map();
+    let totalTransaksiDibaca = 0;
+
+    for (const pangkalan in semuaLog) {
+        semuaLog[pangkalan].forEach(row => {
+            if (!row.noKTP || !row.nama || row.nama === 'Akan diverifikasi') return;
+            totalTransaksiDibaca++;
+            const nik = String(row.noKTP);
+            
+            const dataPelangganSaatIni = pelangganMap.get(nik);
+            const tanggalBaru = new Date(row.tanggal_transaksi.split(',')[0].split('/').reverse().join('-'));
+
+            if (!dataPelangganSaatIni || tanggalBaru > new Date(dataPelangganSaatIni.tanggal_terakhir_transaksi.split(',')[0].split('/').reverse().join('-'))) {
+                pelangganMap.set(nik, {
+                    noKTP: nik,
+                    nama: row.nama,
+                    customerTypes: row.customerTypes,
+                    tanggal_terakhir_transaksi: row.tanggal_transaksi,
+                });
+            }
+        });
+    }
+
+    if (pelangganMap.size === 0) {
+        console.log(chalk.yellow("Tidak ada data valid di master log untuk diproses."));
+        return;
+    }
+
+    const dataPelanggan = Array.from(pelangganMap.values());
+    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+
+    console.log(chalk.green.bold(`\n✅ File "${config.filePaths.masterPelanggan}" berhasil dibuat/diperbarui!`));
+    console.log(`   > Diproses ${totalTransaksiDibaca} baris transaksi.`);
+    console.log(`   > Ditemukan dan disimpan ${dataPelanggan.length} pelanggan unik.`);
+    console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
+}
+
+
 async function backupMasterLog() {
     const filePath = config.filePaths.masterLogTransaksi;
     if (!fs.existsSync(filePath)) return; // Tidak ada yang perlu di-backup
@@ -31,6 +76,72 @@ async function backupMasterLog() {
     const backupPath = filePath.replace('.xlsx', `_backup_${timestamp}.xlsx`);
     fs.copyFileSync(filePath, backupPath);
     console.log(chalk.gray(`   > Backup master log dibuat di: ${backupPath}`));
+}
+
+async function runTambahPelangganBaru(token) {
+    const startTime = Date.now();
+    console.log(chalk.bold.yellow("\n--- [Manajemen] Menambahkan Pelanggan Baru dari File ---"));
+
+    const dataPelangganBaru = excel.bacaFile(config.filePaths.inputFilePelangganBaru);
+    if (!dataPelangganBaru) {
+        console.log(chalk.red(`   Buat file "${config.filePaths.inputFilePelangganBaru}" dengan satu kolom "noKTP".`));
+        return;
+    }
+
+    const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan) || [];
+    const pelangganSet = new Set(dataPelanggan.map(p => String(p.noKTP)));
+
+    const summary = { 'Baru Ditambahkan': 0, 'Sudah Ada (Dilewati)': 0, 'Verifikasi Gagal': 0 };
+    const progressBar = ui.buatProgressBar('Memproses NIK Baru');
+    progressBar.start(dataPelangganBaru.length, 0);
+
+    let adaDataBaru = false;
+
+    for (const [index, user] of dataPelangganBaru.entries()) {
+        progressBar.increment();
+        const nik = String(user.noKTP);
+        if (!nik || !/^\d{16}$/.test(nik)) {
+            summary['Verifikasi Gagal']++;
+            continue;
+        }
+
+        if (pelangganSet.has(nik)) {
+            summary['Sudah Ada (Dilewati)']++;
+            continue;
+        }
+
+        const verificationData = await api.getVerificationData(nik, token);
+        if (verificationData) {
+            const custType = verificationData.customerTypes?.[0]?.name || 'N/A';
+            dataPelanggan.push({
+                noKTP: nik,
+                nama: verificationData.name,
+                customerTypes: custType,
+                tanggal_terakhir_transaksi: 'Belum Pernah Transaksi',
+            });
+            pelangganSet.add(nik);
+            summary['Baru Ditambahkan']++;
+            adaDataBaru = true;
+        } else {
+            summary['Verifikasi Gagal']++;
+        }
+
+        // --- [PERBAIKAN] Menambahkan jeda di setiap iterasi ---
+        if (index < dataPelangganBaru.length - 1) {
+            await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
+        }
+    }
+    progressBar.stop();
+
+    if (adaDataBaru) {
+        excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+        console.log(chalk.green.bold("\n\n✅ Master Pelanggan berhasil diperbarui."));
+    } else {
+        console.log(chalk.yellow("\n\nTidak ada pelanggan baru yang ditambahkan."));
+    }
+
+    ui.tampilkanTabelRingkasan(summary, "Ringkasan Penambahan Pelanggan");
+    console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
 }
 
 // -----------------------------------------------------------------------------
@@ -104,67 +215,85 @@ async function buatRencanaTransaksi(token, profile) {
     const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Cerdas] Membuat Rencana Transaksi Harian ---"));
     
+    const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan);
+    if (!dataPelanggan) {
+        console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan. Jalankan menu "Buat/Update Master Pelanggan" terlebih dahulu.`));
+        return;
+    }
+    
     const { totalStock } = await inquirer.prompt([{
         type: 'number', name: 'totalStock',
         message: `Masukkan total stok yang akan didistribusikan untuk ${chalk.cyan(profile.storeName)}:`,
         validate: (input) => input > 0 ? true : "Jumlah stok harus lebih dari 0."
     }]);
 
-    console.log(chalk.blue("\n1. Memindai seluruh data transaksi dari semua pangkalan..."));
+    console.log(chalk.blue("\n1. Membaca data transaksi bulan ini..."));
     const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
-    
     const globalUsageMap = new Map();
-    const uniqueNikSet = new Set();
     const currentMonth = new Date().getMonth();
-
     for (const pangkalanSheet in semuaLog) {
         semuaLog[pangkalanSheet]
             .filter(row => row.status?.startsWith('Sukses') && new Date(row.tanggal_transaksi.split(',')[0].split('/').reverse().join('-')).getMonth() === currentMonth)
             .forEach(row => {
                 const nik = String(row.noKTP);
-                uniqueNikSet.add(nik);
                 const pangkalanUsage = globalUsageMap.get(nik) || new Map();
                 pangkalanUsage.set(pangkalanSheet, (pangkalanUsage.get(pangkalanSheet) || 0) + 1);
                 globalUsageMap.set(nik, pangkalanUsage);
             });
     }
-    console.log(chalk.gray(`   > Ditemukan ${uniqueNikSet.size} NIK unik dengan transaksi bulan ini.`));
 
-    console.log(chalk.blue("\n2. Mencari & memfilter pelanggan yang berhak..."));
-    const eligibleCustomers = [];
-    const progressBar = ui.buatProgressBar('Memfilter');
-    const allNiks = Array.from(uniqueNikSet);
-    progressBar.start(allNiks.length, 0);
-
+    console.log(chalk.blue("\n2. Melakukan filter cepat berdasarkan data tersimpan..."));
     const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
-
-    for (const nik of allNiks) {
-        progressBar.increment();
-        const verificationData = await api.getVerificationData(nik, token);
-        if (!verificationData) continue;
-
-        const quota = await api.getQuota(nik, verificationData, token);
-        if (!quota || quota.monthly <= 0) continue;
-
+    let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
+        const nik = String(pelanggan.noKTP);
         const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
-        const custType = verificationData.customerTypes?.[0]?.name || 'N/A';
-        const limitPangkalan = (custType === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
+        const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
+        return usageDiPangkalanIni < limitPangkalan && (pelanggan.monthly > 0 || pelanggan.monthly === 'N/A');
+    });
+    console.log(chalk.gray(`   > Ditemukan ${kandidatPelanggan.length} kandidat awal.`));
+    
+    console.log(chalk.blue("\n3. Melakukan Pembaruan Cerdas (Smart Update) pada kandidat..."));
+    const eligibleCustomers = [];
+    const progressBar = ui.buatProgressBar('Update Cerdas');
+    progressBar.start(kandidatPelanggan.length, 0);
+
+    // [PERBAIKAN] Menggunakan .entries() untuk mendapatkan index dan pelanggan
+    for (const [index, pelanggan] of kandidatPelanggan.entries()) {
+        progressBar.increment();
+        const nik = String(pelanggan.noKTP);
+        const verificationData = await api.getVerificationData(nik, token);
+        if (verificationData) {
+            const quota = await api.getQuota(nik, verificationData, token);
+            if (quota) {
+                pelanggan.daily = quota.daily; 
+                pelanggan.monthly = quota.monthly;
+                pelanggan.family = quota.family; 
+                pelanggan.all = quota.all;
+                
+                if (quota.monthly > 0) {
+                    eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
+                }
+            }
+        }
         
-        if (usageDiPangkalanIni < limitPangkalan) {
-            eligibleCustomers.push({ noKTP: nik, quantity: 1, usage: usageDiPangkalanIni });
+        if (index < kandidatPelanggan.length - 1) {
+            await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
         }
     }
     progressBar.stop();
     
+    console.log(chalk.blue("\n4. Menyimpan hasil Pembaruan Cerdas ke Master Pelanggan..."));
+    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+
     if (eligibleCustomers.length === 0) {
-        console.log(chalk.yellow("\nTidak ditemukan pelanggan yang memenuhi syarat saat ini."));
+        console.log(chalk.yellow("\nTidak ditemukan pelanggan yang memenuhi syarat setelah verifikasi API."));
         return;
     }
     
     eligibleCustomers.sort((a, b) => a.usage - b.usage);
-    const pelangganTerpilih = eligibleCustomers.slice(0, totalStock).map(({ noKTP, quantity }) => ({ noKTP, quantity }));
+    const pelangganTerpilih = eligibleCustomers.slice(0, totalStock).map(({ noKTP, quantity = 1 }) => ({ noKTP, quantity }));
 
-    console.log(chalk.green(`\n3. Berhasil menemukan ${eligibleCustomers.length} pelanggan, ${pelangganTerpilih.length} dipilih untuk rencana.`));
+    console.log(chalk.green(`\n5. Berhasil menemukan ${eligibleCustomers.length} pelanggan, ${pelangganTerpilih.length} dipilih untuk rencana.`));
     excel.tulisLog(config.filePaths.rencanaTransaksi, xlsx.utils.book_new(), "Rencana", pelangganTerpilih);
     
     console.log(chalk.bold.green(`\n✅ File "${config.filePaths.rencanaTransaksi}" berhasil dibuat.`));
@@ -369,7 +498,17 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
 
                     const trxData = await api.postTransaction(payload, token);
                     if (!trxData.success) throw new Error(trxData.message || "TRANSACTION_INVALID");
-
+                    if (!pelangganSet.has(nik)) {
+                        const newPelanggan = {
+                        noKTP: nik,
+                        nama: verificationData.name,
+                        customerTypes: custType,
+                        tanggal_terakhir_transaksi: resultRow.tanggal_transaksi,
+                    };
+                    dataPelanggan.push(newPelanggan);
+                    pelangganSet.add(nik);
+                    console.log(chalk.blue(`\n   > Pelanggan baru "${verificationData.name}" ditambahkan ke master.`));
+                    }
                     resultRow.status = `Sukses - ID: ${trxData.data.transactionId}`;
                     summary.Sukses++;
                     currentStock -= quantity;
@@ -408,60 +547,44 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
             sisaStok += summary[key];
         }
     });
-
+    progressBar.stop(); 
+    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
     return { summary, sisaStok };
 }
 
-async function runCekAndUpdateKuotaLog(token) {
+async function runCekAndUpdateKuotaPelanggan(token) {
     const startTime = Date.now();
-    console.log(chalk.bold.yellow("\n--- Memperbarui Kuota Pelanggan di Master Log ---"));
-
-    console.log(chalk.blue("1. Memindai seluruh data pelanggan dari semua pangkalan..."));
-    const { data: semuaLog, workbook } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
+    console.log(chalk.bold.yellow("\n--- Memperbarui Kuota di Master Pelanggan ---"));
     
-    const uniqueNikSet = new Set();
-    for (const pangkalan in semuaLog) {
-        semuaLog[pangkalan].forEach(row => uniqueNikSet.add(String(row.noKTP)));
-    }
-    
-    if (uniqueNikSet.size === 0) {
-        console.log(chalk.yellow("Tidak ada data pelanggan di master log untuk diperbarui."));
+    const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan);
+    if (!dataPelanggan) {
+        console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan.`));
         return;
     }
-    
-    console.log(chalk.blue(`\n2. Mengambil data kuota terbaru untuk ${uniqueNikSet.size} NIK unik...`));
-    const updatedQuotaMap = new Map();
-    const progressBar = ui.buatProgressBar('Update Kuota');
-    const allNiks = Array.from(uniqueNikSet);
-    progressBar.start(allNiks.length, 0);
 
-    for (const nik of allNiks) {
+    console.log(chalk.blue(`\nMengambil data kuota terbaru untuk ${dataPelanggan.length} pelanggan...`));
+    const progressBar = ui.buatProgressBar('Update Kuota');
+    progressBar.start(dataPelanggan.length, 0);
+
+    for (const pelanggan of dataPelanggan) {
         progressBar.increment();
+        const nik = String(pelanggan.noKTP);
         const verificationData = await api.getVerificationData(nik, token);
         if (verificationData) {
             const quota = await api.getQuota(nik, verificationData, token);
-            if (quota) updatedQuotaMap.set(nik, quota);
+            if (quota) {
+                pelanggan.daily = quota.daily;
+                pelanggan.monthly = quota.monthly;
+                pelanggan.family = quota.family;
+                pelanggan.all = quota.all;
+            }
         }
         await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
     }
     progressBar.stop();
     
-    console.log(chalk.blue("\n3. Menyimpan data kuota terbaru ke file master log..."));
-    for (const pangkalan in semuaLog) {
-        semuaLog[pangkalan].forEach(row => {
-            const nik = String(row.noKTP);
-            if (updatedQuotaMap.has(nik)) {
-                const newQuota = updatedQuotaMap.get(nik);
-                row.daily = newQuota.daily;
-                row.monthly = newQuota.monthly;
-                row.family = newQuota.family;
-                row.all = newQuota.all;
-            }
-        });
-        excel.tulisLog(config.filePaths.masterLogTransaksi, workbook, pangkalan, semuaLog[pangkalan]);
-    }
-    
-    console.log(chalk.green.bold("\n\n✅ Proses Selesai. Data kuota di master log telah diperbarui."));
+    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+    console.log(chalk.green.bold("\n\n✅ Proses Selesai. Data kuota di master pelanggan telah diperbarui."));
     console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
 }
 
@@ -600,11 +723,13 @@ async function startSystem() {
             case '3': await eksekusiRencanaTransaksi(token, profile); break;
             case '4': await runTransaksiLangsung(token, profile); break;
             case '5': await runTransactionInputProcess(token, profile); break;
-            case '6': await runCekAndUpdateKuotaLog(token); break;
-            case '7': await runTampilkanLaporan(profile); break;
-            case '8': await runManajemenTemplate(); break;
-            case '9': await startSystem(); return;
-            case '10': 
+            case '6': await runTambahPelangganBaru(token); break;
+            case '7': await runBuatMasterPelanggan(); break;
+            case '8': await runCekAndUpdateKuotaPelanggan(token); break;
+            case '9': await runTampilkanLaporan(profile); break;
+            case '10': await runManajemenTemplate(); break;
+            case '11': await startSystem(); return;
+            case '12': 
                 console.log(chalk.yellow("\nTerima kasih! Sampai jumpa."));
                 process.exit(0);
         }
