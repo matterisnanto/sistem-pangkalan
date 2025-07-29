@@ -160,6 +160,10 @@ async function runTransaksiLangsung(token, profile) {
     console.log(chalk.bold.yellow("\n--- [Transaksi Langsung] Input On-The-Spot ---"));
 
     try {
+        const pathMasterPelanggan = config.filePaths.masterPelanggan;
+        let dataPelanggan = excel.bacaFile(pathMasterPelanggan) || [];
+        const pelangganSet = new Set(dataPelanggan.map(p => String(p.noKTP)));
+        
         const { nik, quantity } = await ui.promptTransaksiLangsung();
         
         console.log(chalk.blue("\nMemproses transaksi..."));
@@ -197,25 +201,46 @@ async function runTransaksiLangsung(token, profile) {
         const trxData = await api.postTransaction(payload, token);
         if (!trxData.success) throw new Error(trxData.message || "TRANSACTION_INVALID");
 
+        const tanggalTransaksi = new Date().toLocaleString('id-ID', {timeZone: 'Asia/Jakarta'});
         const resultRow = {
             noKTP: nik, nama: verificationData.name, customerTypes: custType,
             status: `Sukses - ID: ${trxData.data.transactionId}`,
-            tanggal_transaksi: new Date().toLocaleString('id-ID', {timeZone: 'Asia/Jakarta'}),
+            tanggal_transaksi: tanggalTransaksi,
             pangkalan: profile.storeName, quantity,
         };
         
         historicalData.push(resultRow);
         excel.tulisLog(config.filePaths.masterLogTransaksi, workbook, sheetName, historicalData);
         
+        if (!pelangganSet.has(nik)) {
+            // [PERBAIKAN] Ambil data kuota untuk pelanggan baru
+            const quota = await api.getQuota(nik, verificationData, token);
+
+            const newPelanggan = {
+                noKTP: nik,
+                nama: verificationData.name,
+                customerTypes: custType,
+                tanggal_terakhir_transaksi: tanggalTransaksi,
+                daily: quota?.daily ?? 0,
+                monthly: quota?.monthly ?? 0,
+                family: quota?.family ?? 'N/A',
+                all: quota?.all ?? 0,
+                terakhir_dicek: new Date().toISOString()
+            };
+            dataPelanggan.push(newPelanggan);
+            console.log(chalk.blue(`   > Pelanggan baru "${verificationData.name}" ditambahkan ke master.`));
+        }
+        
+        excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+        
         console.log(chalk.green.bold(`\n✅ Transaksi untuk ${verificationData.name} berhasil!`));
         console.log(`   Stok tersisa: ${productInfo.stockAvailable - quantity}`);
         
     } catch (error) {
         console.log(chalk.red.bold(`\n❌ Gagal: ${error.message}`));
-        // Juga catat kegagalan ke log jika perlu
     }
     
-    console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
+    console.log(`\n⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
 }
 
 async function buatRencanaTransaksi(token, profile) {
@@ -252,11 +277,35 @@ async function buatRencanaTransaksi(token, profile) {
     console.log(chalk.blue("\n2. Melakukan filter cepat berdasarkan data tersimpan..."));
     const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
     
-    let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
+     let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
         const nik = String(pelanggan.noKTP);
         const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
         const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
-        return usageDiPangkalanIni < limitPangkalan && !(typeof pelanggan.monthly === 'number' && pelanggan.monthly <= 0);
+        
+        // --- [ATURAN BARU] Pengecekan Jarak Transaksi ---
+        let lolosJarakHari = false;
+        const tglTerakhir = pelanggan.tanggal_terakhir_transaksi;
+
+        if (!tglTerakhir || tglTerakhir === 'Belum Pernah Transaksi') {
+            lolosJarakHari = true;
+        } else {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            
+            const lastTxDate = new Date(tglTerakhir.split(',')[0].split('/').reverse().join('-'));
+            lastTxDate.setHours(0, 0, 0, 0);
+
+            const selisihMillis = today.getTime() - lastTxDate.getTime();
+            const selisihHari = Math.floor(selisihMillis / (1000 * 60 * 60 * 24));
+
+            if (selisihHari >= 2) {
+                lolosJarakHari = true;
+            }
+        }
+        
+        const lolosKuotaCache = !(typeof pelanggan.daily === 'number' && pelanggan.daily <= 0);
+
+        return usageDiPangkalanIni < limitPangkalan && lolosKuotaCache && lolosJarakHari;
     });
     console.log(chalk.gray(`   > Ditemukan ${kandidatPelanggan.length} kandidat awal.`));
     
@@ -282,7 +331,7 @@ async function buatRencanaTransaksi(token, profile) {
         }
 
         if (isDataFresh) {
-            if (pelanggan.monthly > 0) {
+            if (pelanggan.daily > 0) {
                 eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
             }
         } else {
@@ -296,7 +345,7 @@ async function buatRencanaTransaksi(token, profile) {
                     pelanggan.all = quota.all;
                     pelanggan.terakhir_dicek = new Date().toISOString();
                     
-                    if (quota.monthly > 0) {
+                    if (quota.daily > 0) {
                         eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
                     }
                 }
@@ -350,7 +399,7 @@ async function eksekusiRencanaTransaksi(token, profile) {
         console.log(chalk.yellow.bold(`\n Terdapat ${sisaStok} sisa stok dari transaksi yang gagal/dilewati.`));
         const { alokasi } = await inquirer.prompt([{
             type: 'confirm', name: 'alokasi', 
-            message: `Apakah Anda ingin mencari ${sisaStok} pelanggan lain untuk sisa stok ini?`,
+            message: `Apakah Anda ingin mencari dan langsung mengeksekusi transaksi untuk ${sisaStok} pelanggan pengganti?`,
             default: true
         }]);
         if (alokasi) {
@@ -401,7 +450,7 @@ async function alokasiSisaStok(token, profile, sisaStok, niksSudahProses) {
         if (!verificationData) continue;
 
         const quota = await api.getQuota(nik, verificationData, token);
-        if (!quota || quota.monthly <= 0) continue;
+        if (!quota || quota.daily <= 0) continue;
 
         const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
         const custType = verificationData.customerTypes?.[0]?.name || 'N/A';
@@ -431,8 +480,9 @@ async function alokasiSisaStok(token, profile, sisaStok, niksSudahProses) {
     const fileTambahan = "input/rencana_tambahan.xlsx";
     excel.tulisLog(fileTambahan, xlsx.utils.book_new(), "Rencana Tambahan", pelangganTambahan);
     
-    console.log(chalk.bold.green(`\n✅ File "${fileTambahan}" berhasil dibuat dengan ${pelangganTambahan.length} pelanggan baru.`));
-    console.log(chalk.cyan(`   Untuk melanjutkan, ubah nama file ini menjadi "${config.filePaths.rencanaTransaksi}" dan jalankan lagi menu "Eksekusi Rencana".`));
+    console.log(chalk.bold.green(`\n✅ Berhasil menemukan ${pelangganTambahan.length} pelanggan pengganti.`));
+    console.log(chalk.blue("   Memulai eksekusi otomatis untuk pelanggan pengganti..."));
+    await runTransactionInputProcess(token, profile, pelangganTambahan);
     console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
 }
 
@@ -558,7 +608,11 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
                     currentStock -= quantity;
                     usageMap.set(nik, (usageMap.get(nik) || 0) + 1);
 
-                    if (!pelangganSet.has(nik)) {
+                    if (pelangganDiMaster) {
+                        // Perbarui tanggal transaksi terakhir secara real-time di memori
+                        pelangganDiMaster.tanggal_terakhir_transaksi = resultRow.tanggal_transaksi;
+                    } else if (!pelangganSet.has(nik)) {
+                        // Tambahkan pelanggan baru jika belum ada
                         const newPelanggan = {
                             noKTP: nik, nama: verificationData.name, customerTypes: custType,
                             tanggal_terakhir_transaksi: resultRow.tanggal_transaksi,
