@@ -54,16 +54,32 @@ const getQuota = async (nik, verificationData, token) => {
     try {
         const { familyIdEncrypted, customerTypes } = verificationData;
         const customerType = customerTypes?.[0]?.name;
-        if (!familyIdEncrypted || !customerType) return null;
+
+        // [PERBAIKAN] Pengecekan familyIdEncrypted dihapus karena tidak selalu ada.
+        // Hanya customerType yang wajib.
+        if (!customerType) return null;
+
         const { data } = await apiInstance.get(`/general/v4/customers/${nik}/quota`, {
-            params: { familyId: familyIdEncrypted, customerType }, headers: getHeaders(token),
+            params: {
+                familyId: familyIdEncrypted || '', // Kirim string kosong jika tidak ada
+                customerType: customerType
+            },
+            headers: getHeaders(token),
         });
+
         if (data?.success && data.data.quotaRemaining) {
             const q = data.data.quotaRemaining;
-            return { daily: q.daily ?? 0, monthly: q.monthly ?? 0, all: q.all ?? 0, family: q.family ?? 'N/A' };
+            return {
+                daily: q.daily ?? 0,
+                monthly: q.monthly ?? 0,
+                all: q.all ?? 0,
+                family: q.family ?? 'N/A'
+            };
         }
         return null;
-    } catch (error) { return null; }
+    } catch (error) {
+        return null;
+    }
 };
 
 const postTransaction = async (payload, token) => {
