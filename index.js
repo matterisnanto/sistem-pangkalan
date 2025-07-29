@@ -251,11 +251,12 @@ async function buatRencanaTransaksi(token, profile) {
 
     console.log(chalk.blue("\n2. Melakukan filter cepat berdasarkan data tersimpan..."));
     const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
+    
     let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
         const nik = String(pelanggan.noKTP);
         const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
         const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
-        return usageDiPangkalanIni < limitPangkalan && (pelanggan.monthly > 0 || pelanggan.monthly === 'N/A');
+        return usageDiPangkalanIni < limitPangkalan && !(typeof pelanggan.monthly === 'number' && pelanggan.monthly <= 0);
     });
     console.log(chalk.gray(`   > Ditemukan ${kandidatPelanggan.length} kandidat awal.`));
     
@@ -264,26 +265,27 @@ async function buatRencanaTransaksi(token, profile) {
     const progressBar = ui.buatProgressBar('Update Cerdas');
     progressBar.start(kandidatPelanggan.length, 0);
 
-    // [PERBAIKAN] Menggunakan .entries() untuk mendapatkan index dan pelanggan
     for (const [index, pelanggan] of kandidatPelanggan.entries()) {
         progressBar.increment();
         const nik = String(pelanggan.noKTP);
+
         let isDataFresh = false;
         if (pelanggan.terakhir_dicek) {
             const lastCheckedDate = new Date(pelanggan.terakhir_dicek);
-            const hoursDiff = (new Date() - lastCheckedDate) / (1000 * 60 * 60);
-            if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) {
-                isDataFresh = true;
+            // [PERBAIKAN] Cek apakah tanggal valid sebelum menghitung selisih
+            if (!isNaN(lastCheckedDate)) {
+                const hoursDiff = (new Date() - lastCheckedDate) / (1000 * 60 * 60);
+                if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) {
+                    isDataFresh = true;
+                }
             }
         }
 
         if (isDataFresh) {
-            // Jika data masih baru, percaya pada cache dan langsung loloskan
             if (pelanggan.monthly > 0) {
                 eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
             }
         } else {
-            // Jika data sudah basi atau tidak ada, baru hubungi API
             const verificationData = await api.getVerificationData(nik, token);
             if (verificationData) {
                 const quota = await api.getQuota(nik, verificationData, token);
@@ -292,17 +294,16 @@ async function buatRencanaTransaksi(token, profile) {
                     pelanggan.monthly = quota.monthly;
                     pelanggan.family = quota.family; 
                     pelanggan.all = quota.all;
-                    pelanggan.terakhir_dicek = new Date().toISOString(); // Update stempel waktu
+                    pelanggan.terakhir_dicek = new Date().toISOString();
                     
                     if (quota.monthly > 0) {
                         eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
                     }
                 }
             }
-        }
-        
-        if (index < kandidatPelanggan.length - 1) {
-            await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
+            if (index < kandidatPelanggan.length - 1) {
+                await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
+            }
         }
     }
     progressBar.stop();
@@ -316,8 +317,15 @@ async function buatRencanaTransaksi(token, profile) {
     }
     
     eligibleCustomers.sort((a, b) => a.usage - b.usage);
-    const pelangganTerpilih = eligibleCustomers.slice(0, totalStock).map(({ noKTP, quantity = 1 }) => ({ noKTP, quantity }));
-
+    const pelangganTerpilih = eligibleCustomers.slice(0, totalStock).map(p => ({
+        noKTP: p.noKTP,
+        nama: p.nama,
+        customerTypes: p.customerTypes,
+        sisa_kuota_harian: p.daily,
+        sisa_kuota_bulanan: p.monthly,
+        sisa_kuota_keluarga: p.family,
+        quantity: 1
+    }));
     console.log(chalk.green(`\n5. Berhasil menemukan ${eligibleCustomers.length} pelanggan, ${pelangganTerpilih.length} dipilih untuk rencana.`));
     excel.tulisLog(config.filePaths.rencanaTransaksi, xlsx.utils.book_new(), "Rencana", pelangganTerpilih);
     
@@ -411,7 +419,15 @@ async function alokasiSisaStok(token, profile, sisaStok, niksSudahProses) {
     }
 
     eligibleCustomers.sort((a, b) => a.usage - b.usage);
-    const pelangganTambahan = eligibleCustomers.slice(0, sisaStok).map(({ noKTP, quantity }) => ({ noKTP, quantity }));
+    const pelangganTambahan = eligibleCustomers.slice(0, sisaStok).map(p => ({
+        noKTP: p.noKTP,
+        nama: p.nama,
+        customerTypes: p.customerTypes,
+        sisa_kuota_harian: p.daily,
+        sisa_kuota_bulanan: p.monthly,
+        sisa_kuota_keluarga: p.family,
+        quantity: 1
+    })); 
     const fileTambahan = "input/rencana_tambahan.xlsx";
     excel.tulisLog(fileTambahan, xlsx.utils.book_new(), "Rencana Tambahan", pelangganTambahan);
     
@@ -428,20 +444,28 @@ async function runManajemenTemplate() {
     const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Utilitas] Membuat File Template Input ---"));
 
-    // Template untuk Mode Cerdas
+    // Template untuk Rencana Transaksi
     const pathRencana = config.filePaths.rencanaTransaksi;
     if (!fs.existsSync(pathRencana)) {
-        const templateData = [{ noKTP: '1234567890123456', quantity: 1 }];
+        const templateData = [{
+            noKTP: '1234567890123456',
+            nama: 'NAMA PELANGGAN',
+            customerTypes: 'Rumah Tangga',
+            quantity: 1,
+            sisa_kuota_harian: 1,
+            sisa_kuota_bulanan: 4,
+            sisa_kuota_keluarga: 4
+        }];
         excel.tulisLog(pathRencana, xlsx.utils.book_new(), "Rencana", templateData);
         console.log(chalk.green(`   ✅ Template "${pathRencana}" berhasil dibuat.`));
     } else {
         console.log(chalk.gray(`   ℹ️  File "${pathRencana}" sudah ada.`));
     }
 
-    // Template untuk Mode Klasik (Input Manual)
+    // Template untuk Input Manual (jika masih diperlukan)
     const pathManual = config.filePaths.inputFileTransaksi;
     if (!fs.existsSync(pathManual)) {
-        const templateData = [{ noKTP: '1234567890123456', quantity: 1, nama: '(opsional)' }];
+        const templateData = [{ noKTP: '1234567890123456', quantity: 1 }];
         excel.tulisLog(pathManual, xlsx.utils.book_new(), "Sheet1", templateData);
         console.log(chalk.green(`   ✅ Template "${pathManual}" berhasil dibuat.`));
     } else {
@@ -458,6 +482,11 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
     if (!isModeCerdas) {
         console.log(chalk.bold.yellow(`\n--- [Utilitas] Input Transaksi Manual ---`));
     }
+
+    // [PERBAIKAN] Muat data master pelanggan di awal fungsi
+    const pathMasterPelanggan = config.filePaths.masterPelanggan;
+    let dataPelanggan = excel.bacaFile(pathMasterPelanggan) || [];
+    const pelangganSet = new Set(dataPelanggan.map(p => String(p.noKTP)));
 
     let productInfo;
     try {
@@ -523,21 +552,20 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
 
                     const trxData = await api.postTransaction(payload, token);
                     if (!trxData.success) throw new Error(trxData.message || "TRANSACTION_INVALID");
-                    if (!pelangganSet.has(nik)) {
-                        const newPelanggan = {
-                        noKTP: nik,
-                        nama: verificationData.name,
-                        customerTypes: custType,
-                        tanggal_terakhir_transaksi: resultRow.tanggal_transaksi,
-                    };
-                    dataPelanggan.push(newPelanggan);
-                    pelangganSet.add(nik);
-                    console.log(chalk.blue(`\n   > Pelanggan baru "${verificationData.name}" ditambahkan ke master.`));
-                    }
+
                     resultRow.status = `Sukses - ID: ${trxData.data.transactionId}`;
                     summary.Sukses++;
                     currentStock -= quantity;
                     usageMap.set(nik, (usageMap.get(nik) || 0) + 1);
+
+                    if (!pelangganSet.has(nik)) {
+                        const newPelanggan = {
+                            noKTP: nik, nama: verificationData.name, customerTypes: custType,
+                            tanggal_terakhir_transaksi: resultRow.tanggal_transaksi,
+                        };
+                        dataPelanggan.push(newPelanggan);
+                        pelangganSet.add(nik);
+                    }
                 }
             }
         } catch (error) {
@@ -560,6 +588,9 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
     
     if (currentStock > 0) progressBar.stop();
     
+    // [PERBAIKAN] Simpan kembali file master pelanggan yang mungkin sudah diperbarui
+    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+    
     if(!isModeCerdas) {
         console.log(chalk.green.bold("\n\n✅ Proses Selesai. Master Log telah diperbarui."));
         ui.tampilkanTabelRingkasan(summary, "Ringkasan Input Transaksi");
@@ -572,8 +603,7 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
             sisaStok += summary[key];
         }
     });
-    progressBar.stop(); 
-    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+
     return { summary, sisaStok };
 }
 
@@ -661,26 +691,26 @@ async function runValidasiRencana() {
     const errors = [];
     const nikSet = new Set();
     data.forEach((row, index) => {
-        const baris = index + 2;
-        if (!row.noKTP || !/^\d{16}$/.test(String(row.noKTP))) {
+        const baris = index + 2; // Baris di Excel dimulai dari 2 (1 untuk header)
+        const nik = String(row.noKTP);
+
+        if (!nik || !/^\d{16}$/.test(nik)) {
             errors.push({ baris, nik: row.noKTP || '', masalah: 'Format NIK salah (harus 16 digit angka)' });
         }
-        if (nikSet.has(row.noKTP)) {
-            errors.push({ baris, nik: row.noKTP, masalah: 'NIK duplikat di dalam file' });
+        if (nikSet.has(nik)) {
+            errors.push({ baris, nik: nik, masalah: 'NIK duplikat di dalam file' });
         }
         if (!row.quantity || typeof row.quantity !== 'number' || row.quantity <= 0) {
-            errors.push({ baris, nik: row.noKTP, masalah: 'Kuantitas tidak valid (harus angka > 0)' });
+            errors.push({ baris, nik: nik, masalah: 'Kuantitas tidak valid (harus angka > 0)' });
         }
-        nikSet.add(row.noKTP);
+        nikSet.add(nik);
     });
 
     if (errors.length === 0) {
         console.log(chalk.green.bold("\n✅ Validasi berhasil! Tidak ditemukan error pada file rencana."));
     } else {
-        console.log(chalk.red.bold(`\n❌ Ditemukan ${errors.length} error pada file rencana:`));
-        const table = new Table({ head: [chalk.cyan('Baris'), chalk.cyan('NIK'), chalk.cyan('Masalah')] });
-        errors.forEach(e => table.push([e.baris, e.nik, e.masalah]));
-        console.log(table.toString());
+        // [PERBAIKAN] Panggil fungsi dari ui.js untuk menampilkan tabel
+        ui.tampilkanTabelValidasi(errors);
     }
 }
 

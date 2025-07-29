@@ -148,6 +148,13 @@ const tampilkanTabelRingkasan = (summary, title = 'Ringkasan Proses') => {
     console.log(table.toString());
 };
 
+const tampilkanTabelValidasi = (errors) => {
+    console.log(chalkInstance.red.bold(`\n❌ Ditemukan ${errors.length} error pada file rencana:`));
+    const table = new Table({ head: [chalkInstance.cyan('Baris'), chalkInstance.cyan('NIK'), chalkInstance.cyan('Masalah')] });
+    errors.forEach(e => table.push([e.baris, e.nik, e.masalah]));
+    console.log(table.toString());
+};
+
 const tampilkanTabelLaporan = (sortedData) => {
     const table = new Table({ head: [chalkInstance.cyan('NIK'), chalkInstance.cyan('Nama'), chalkInstance.cyan('Kategori'), chalkInstance.cyan('Total Beli (Tabung)')] });
     sortedData.forEach(([nik, data]) => {
@@ -159,5 +166,5 @@ const tampilkanTabelLaporan = (sortedData) => {
 module.exports = {
     initializeDependencies, formatWaktuProses, dapatkanToken, tampilkanHeader,
     tampilkanDashboard, tampilkanMenuUtama, buatProgressBar, tampilkanTabelRingkasan,
-    promptTransaksiLangsung,tampilkanTabelLaporan, promptPilihRentangTanggal,
+    promptTransaksiLangsung,tampilkanTabelLaporan, promptPilihRentangTanggal, tampilkanTabelValidasi,
 };
