@@ -1,4 +1,4 @@
-Sistem Pangkalan Cerdas v6.0 🚀
+Sistem Pangkalan Cerdas v5.0 🚀
 
 Sebuah command-line tool canggih untuk membantu mengelola dan mengotomatisasi pencatatan transaksi harian di pangkalan gas semangka Anda. Dirancang untuk efisiensi, akurasi, dan keamanan jangka panjang.
 
