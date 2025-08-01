@@ -26,6 +26,15 @@ const formatWaktuProses = (ms) => {
     return parts.join(' ');
 };
 
+const promptTambahPelangganSatuan = () => inquirerInstance.prompt([
+    {
+        type: 'input',
+        name: 'nik',
+        message: '➡️  Masukkan NIK Pelanggan yang akan ditambahkan (16 digit):',
+        validate: (input) => /^\d{16}$/.test(input) ? true : 'Format NIK salah, harus 16 digit angka.'
+    }
+]);
+
 const dapatkanToken = async () => {
     try {
         if (fs.existsSync(config.filePaths.tokenCache)) {
@@ -67,6 +76,15 @@ const tampilkanDashboard = (profile, productInfo) => {
     console.log(table.toString());
 };
 
+const promptSearchByName = () => inquirerInstance.prompt([
+    {
+        type: 'input',
+        name: 'nama',
+        message: '➡️  Masukkan nama pelanggan yang ingin dicari di Master Pelanggan:',
+        validate: (input) => input ? true : 'Nama tidak boleh kosong.'
+    }
+]);
+
 const tampilkanMenuUtama = () => inquirerInstance.prompt([{
     type: 'list', name: 'menuChoice', message: 'Pilih tindakan:',
     choices: [
@@ -78,13 +96,16 @@ const tampilkanMenuUtama = () => inquirerInstance.prompt([{
         { name: '5. Input Transaksi Manual (dari File)', value: '5' },
         new inquirerInstance.Separator(chalkInstance.bold.cyan('--- Utilitas & Laporan ---')),
         { name: '6. Tambah Pelanggan Baru dari File', value: '6' },
-        { name: '7. Buat/Update Master Pelanggan', value: '7' },
-        { name: '8. Perbarui Kuota Seluruh Pelanggan', value: '8' },
-        { name: '9. Tampilkan Laporan Penjualan Bulan Ini', value: '9' },
-        { name: '10. Buat File Template Input', value: '10' },
+        { name: '7. Tambah Pelanggan Satuan (Manual)', value: '7' },
+        { name: '8. Buat/Update Master Pelanggan', value: '8' },
+        { name: '9. Perbarui Kuota Seluruh Pelanggan', value: '9' },
+        { name: '10. Sinkronisasi & Laporan Penjualan', value: '10' },
+        { name: '11. Buat File Template Input', value: '11' },
+        { name: '12. Cek & Perbaiki Data Pelanggan', value: '12' },
+        { name: '13. Cari Pelanggan di Master Lokal', value: '13' }, // <--- MENU DIAGNOSIS BARU
         new inquirerInstance.Separator(),
-        { name: '11. Ganti Token / Pangkalan', value: '11' },
-        { name: '12. Keluar', value: '12' },
+        { name: '14. Ganti Token / Pangkalan', value: '14' },
+        { name: '15. Keluar', value: '15' },
     ]
 }]);
 
@@ -166,5 +187,5 @@ const tampilkanTabelLaporan = (sortedData) => {
 module.exports = {
     initializeDependencies, formatWaktuProses, dapatkanToken, tampilkanHeader,
     tampilkanDashboard, tampilkanMenuUtama, buatProgressBar, tampilkanTabelRingkasan,
-    promptTransaksiLangsung,tampilkanTabelLaporan, promptPilihRentangTanggal, tampilkanTabelValidasi,
+    promptTransaksiLangsung,tampilkanTabelLaporan, promptPilihRentangTanggal, tampilkanTabelValidasi, promptTambahPelangganSatuan, tampilkanTabelValidasi, promptTambahPelangganSatuan, promptSearchByName,
 };

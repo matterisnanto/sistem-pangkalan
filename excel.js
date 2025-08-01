@@ -10,7 +10,21 @@ const bacaFile = (filePath) => {
     }
     try {
         const workbook = xlsx.readFile(filePath);
-        return xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+        const targetSheetName = "Pelanggan";
+        let worksheet = workbook.Sheets[targetSheetName];
+
+        // Jika sheet "Pelanggan" tidak ada, coba baca dari sheet pertama sebagai fallback
+        if (!worksheet) {
+            const firstSheetName = workbook.SheetNames[0];
+            console.log(chalk.yellow(`\n   > Peringatan: Sheet "${targetSheetName}" tidak ditemukan di ${filePath}. Membaca dari sheet pertama: "${firstSheetName}".`));
+            worksheet = workbook.Sheets[firstSheetName];
+        }
+
+        if (!worksheet) {
+             throw new Error(`Tidak ada sheet yang bisa dibaca di file: ${filePath}`);
+        }
+
+        return xlsx.utils.sheet_to_json(worksheet);
     } catch (error) {
         throw new Error(`Gagal membaca file: ${filePath}. Error: ${error.message}`);
     }

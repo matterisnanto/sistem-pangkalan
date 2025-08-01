@@ -100,6 +100,45 @@ const getMonthlyReport = async (token) => {
     return data.data.customersReport;
 };
 
+const getTransactionsReport = async (token, startDate, endDate) => {
+    const { data } = await apiInstance.get("/general/v1/transactions/report", {
+        params: { startDate, endDate }, headers: getHeaders(token),
+    });
+    // Pengecekan: Pastikan customersReport adalah sebuah array
+    if (data?.success && Array.isArray(data?.data?.customersReport)) {
+        return data.data.customersReport; // Kembalikan array jika valid
+    } else {
+        // Jika tidak valid, kembalikan array kosong untuk mencegah error
+        console.log(chalk.yellow(`\n   > Peringatan: Tidak ada data ringkasan laporan (customersReport) dari server.`));
+        return [];
+    }
+};
+
+const getTransactionsByCustomer = async (token, startDate, endDate, customerReportId) => {
+    const { data } = await apiInstance.get("/general/v1/transactions", {
+        params: { startDate, endDate, customerReportId }, headers: getHeaders(token),
+    });
+    // Pengecekan: Pastikan data.data.data adalah sebuah array
+    if (data?.success && Array.isArray(data?.data?.data)) {
+        return data.data.data; // Kembalikan array jika valid
+    } else {
+        // Jika tidak valid, kembalikan array kosong untuk mencegah error 'length'
+        console.log(chalk.yellow(`\n   > Peringatan: Tidak ada data transaksi array untuk customerReportId ${customerReportId}. Melanjutkan...`));
+        return []; 
+    }
+};
+
+const getTransactionDetail = async (token, transactionId) => {
+    const { data } = await apiInstance.get(`/general/v1/transactions/${transactionId}`, {
+        headers: getHeaders(token),
+    });
+    if (!data?.success || !data?.data) {
+        throw new Error(`Gagal memuat detail untuk transactionId: ${transactionId}`);
+    }
+    return data.data;
+};
+
 module.exports = {
     getProfileInfo, getProducts, getVerificationData, getQuota, postTransaction, getMonthlyReport,
+    getTransactionsReport, getTransactionsByCustomer, getTransactionDetail,
 };

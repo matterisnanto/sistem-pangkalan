@@ -15,10 +15,11 @@
       "batasPerPangkalan": 4,
       "batasUsahaMikro": 15,
       "masaBerlakuCacheKuotaJam": 24,
-       "faktor_buffer_kandidat": 1.5 
+      "faktor_buffer_kandidat": 1.5,
+      "jarakHariMinimumTransaksi": 7
     },
     "jeda": {
-      "transaksi": { "minDetik": 15, "maksDetik": 45 },
+      "transaksi": { "minDetik": 8, "maksDetik": 20 },
       "cekKuota": { "minDetik": 5, "maksDetik": 15 }
     },
     "retry": {
