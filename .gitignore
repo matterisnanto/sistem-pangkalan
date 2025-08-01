@@ -1,3 +1,5 @@
 /.token_cache.json
 /input
 /output
+/package-lock.zip
+/node_modules

@@ -14,7 +14,8 @@
     "aturanBisnis": {
       "batasPerPangkalan": 4,
       "batasUsahaMikro": 15,
-      "masaBerlakuCacheKuotaJam": 24
+      "masaBerlakuCacheKuotaJam": 24,
+       "faktor_buffer_kandidat": 1.5 
     },
     "jeda": {
       "transaksi": { "minDetik": 15, "maksDetik": 45 },

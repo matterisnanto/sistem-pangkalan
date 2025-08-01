@@ -277,12 +277,11 @@ async function buatRencanaTransaksi(token, profile) {
     console.log(chalk.blue("\n2. Melakukan filter cepat berdasarkan data tersimpan..."));
     const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
     
-     let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
+    let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
         const nik = String(pelanggan.noKTP);
         const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
         const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
         
-        // --- [ATURAN BARU] Pengecekan Jarak Transaksi ---
         let lolosJarakHari = false;
         const tglTerakhir = pelanggan.tanggal_terakhir_transaksi;
 
@@ -303,25 +302,34 @@ async function buatRencanaTransaksi(token, profile) {
             }
         }
         
-        const lolosKuotaCache = !(typeof pelanggan.daily === 'number' && pelanggan.daily <= 0);
-
+        const lolosKuotaCache = !(typeof pelanggan.monthly === 'number' && pelanggan.monthly <= 0);
         return usageDiPangkalanIni < limitPangkalan && lolosKuotaCache && lolosJarakHari;
     });
     console.log(chalk.gray(`   > Ditemukan ${kandidatPelanggan.length} kandidat awal.`));
     
-    console.log(chalk.blue("\n3. Melakukan Pembaruan Cerdas (Smart Update) pada kandidat..."));
+    kandidatPelanggan.sort((a, b) => {
+        const tglA = a.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(a.tanggal_terakhir_transaksi.split(',')[0].split('/').reverse().join('-')).getTime();
+        const tglB = b.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(b.tanggal_terakhir_transaksi.split(',')[0].split('/').reverse().join('-')).getTime();
+        return tglA - tglB;
+    });
+    
+    const limitVerifikasi = Math.ceil(totalStock * config.aturanBisnis.faktor_buffer_kandidat);
+    const kandidatTeratas = kandidatPelanggan.slice(0, limitVerifikasi);
+    
+    console.log(chalk.blue(`\n3. Memprioritaskan dan memilih ${kandidatTeratas.length} kandidat terbaik untuk diverifikasi API...`));
     const eligibleCustomers = [];
     const progressBar = ui.buatProgressBar('Update Cerdas');
-    progressBar.start(kandidatPelanggan.length, 0);
+    // [PERBAIKAN] Mulai progress bar dengan jumlah kandidat yang sudah dibatasi
+    progressBar.start(kandidatTeratas.length, 0);
 
-    for (const [index, pelanggan] of kandidatPelanggan.entries()) {
+    // [PERBAIKAN] Loop hanya pada kandidatTeratas, bukan kandidatPelanggan
+    for (const [index, pelanggan] of kandidatTeratas.entries()) {
         progressBar.increment();
         const nik = String(pelanggan.noKTP);
 
         let isDataFresh = false;
         if (pelanggan.terakhir_dicek) {
             const lastCheckedDate = new Date(pelanggan.terakhir_dicek);
-            // [PERBAIKAN] Cek apakah tanggal valid sebelum menghitung selisih
             if (!isNaN(lastCheckedDate)) {
                 const hoursDiff = (new Date() - lastCheckedDate) / (1000 * 60 * 60);
                 if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) {
@@ -331,7 +339,7 @@ async function buatRencanaTransaksi(token, profile) {
         }
 
         if (isDataFresh) {
-            if (pelanggan.daily > 0) {
+            if (pelanggan.monthly > 0) {
                 eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
             }
         } else {
@@ -345,12 +353,12 @@ async function buatRencanaTransaksi(token, profile) {
                     pelanggan.all = quota.all;
                     pelanggan.terakhir_dicek = new Date().toISOString();
                     
-                    if (quota.daily > 0) {
+                    if (quota.monthly > 0) {
                         eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
                     }
                 }
             }
-            if (index < kandidatPelanggan.length - 1) {
+            if (index < kandidatTeratas.length - 1) {
                 await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
             }
         }
@@ -370,11 +378,12 @@ async function buatRencanaTransaksi(token, profile) {
         noKTP: p.noKTP,
         nama: p.nama,
         customerTypes: p.customerTypes,
+        quantity: 1,
         sisa_kuota_harian: p.daily,
         sisa_kuota_bulanan: p.monthly,
-        sisa_kuota_keluarga: p.family,
-        quantity: 1
+        sisa_kuota_keluarga: p.family
     }));
+
     console.log(chalk.green(`\n5. Berhasil menemukan ${eligibleCustomers.length} pelanggan, ${pelangganTerpilih.length} dipilih untuk rencana.`));
     excel.tulisLog(config.filePaths.rencanaTransaksi, xlsx.utils.book_new(), "Rencana", pelangganTerpilih);
     
