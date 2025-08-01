@@ -8,7 +8,7 @@ Ikuti langkah-langkah ini dari awal untuk menjalankan sistem.
 
 Prasyarat
 
-Pastikan Anda sudah menginstal Node.js di komputer Anda. Anda bisa mengunduhnya dari situs resmi Node.js.
+Pastikan Anda sudah menginstal Node.js Node.js v22.14.0 di komputer Anda. Anda bisa mengunduhnya dari situs resmi Node.js.
 
 Langkah-langkah
 
