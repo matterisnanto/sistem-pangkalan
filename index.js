@@ -232,11 +232,11 @@ async function buatRencanaTransaksi(token, profile) {
     const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Cerdas] Membuat Rencana Transaksi Harian ---"));
     
-    // --- BLOK SINKRONISASI INTERNAL DIMULAI DI SINI ---
+    // --- Blok Sinkronisasi Internal (dari perbaikan sebelumnya) ---
     try {
         console.log(chalk.bold.magenta("\n--- Langkah A: Sinkronisasi Data Otomatis ---"));
         const today = new Date();
-        const startDate = new Date(today.getFullYear(), today.getMonth(), 1); // Awal bulan ini
+        const startDate = new Date(today.getFullYear(), today.getMonth(), 1);
         const tglMulai = startDate.toISOString().split('T')[0];
         const tglSelesai = today.toISOString().split('T')[0];
 
@@ -260,16 +260,7 @@ async function buatRencanaTransaksi(token, profile) {
                         const detail = await api.getTransactionDetail(token, tx.transactionId);
                         const fullNik = detail.subsidi.nik || customer.nationalityId;
                         
-                        const newLogRow = {
-                            noKTP: fullNik,
-                            nama: detail.subsidi.nama,
-                            customerTypes: detail.subsidi.category,
-                            status: `Sukses - ID: ${detail.transactionId}`,
-                            tanggal_transaksi: detail.subHeader.date,
-                            pangkalan: detail.receipt.storeName,
-                            quantity: detail.products[0].rawValue.quantity
-                        };
-                        
+                        const newLogRow = { noKTP: fullNik, nama: detail.subsidi.nama, customerTypes: detail.subsidi.category, status: `Sukses - ID: ${detail.transactionId}`, tanggal_transaksi: detail.subHeader.date, pangkalan: detail.receipt.storeName, quantity: detail.products[0].rawValue.quantity };
                         localData.push(newLogRow);
                         transactionsAdded++;
                     }
@@ -280,7 +271,6 @@ async function buatRencanaTransaksi(token, profile) {
                 console.log(chalk.green(`      > Ditemukan dan ditambahkan ${transactionsAdded} transaksi baru ke log.`));
                 excel.tulisLog(config.filePaths.masterLogTransaksi, workbook, sheetName, localData);
 
-                // Memperbarui tanggal terakhir transaksi di master pelanggan setelah log diupdate
                 const latestTransactionMap = new Map();
                 for(const trx of localData){
                     if(trx.noKTP && trx.status?.startsWith('Sukses')){
@@ -324,130 +314,83 @@ async function buatRencanaTransaksi(token, profile) {
         console.log(chalk.red.bold(`\n❌ Gagal melakukan sinkronisasi otomatis: ${error.message}`));
         console.log(chalk.yellow("   Melanjutkan proses dengan data lokal yang ada..."));
     }
-    // --- BLOK SINKRONISASI INTERNAL SELESAI ---
-
+    
+    // --- Logika Pembuatan Rencana (Bagian yang sama seperti sebelumnya) ---
     const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan);
     if (!dataPelanggan || dataPelanggan.length === 0) {
-        console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan atau kosong. Jalankan menu "Buat/Update Master Pelanggan" terlebih dahulu.`));
+        console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan atau kosong.`));
         return;
     }
-    
-    const { totalStock } = await inquirer.prompt([{
-        type: 'number', name: 'totalStock',
-        message: `Masukkan total stok yang akan didistribusikan untuk ${chalk.cyan(profile.storeName)}:`,
-        validate: (input) => input > 0 ? true : "Jumlah stok harus lebih dari 0."
-    }]);
-
-    console.log(chalk.blue("1. Membaca data transaksi bulan ini dari log yang sudah sinkron..."));
+    const { totalStock } = await inquirer.prompt([{ type: 'number', name: 'totalStock', message: `Masukkan total stok yang akan didistribusikan untuk ${chalk.cyan(profile.storeName)}:`, validate: (input) => input > 0 ? true : "Jumlah stok harus lebih dari 0." }]);
+    console.log(chalk.blue("\n1. Membaca data transaksi bulan ini dari log yang sudah sinkron..."));
     const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
     const globalUsageMap = new Map();
     const currentMonth = new Date().getMonth();
     for (const pangkalanSheet in semuaLog) {
-        semuaLog[pangkalanSheet]
-            .filter(row => row.status?.startsWith('Sukses') && new Date(String(row.tanggal_transaksi).split(',')[0].split('/').reverse().join('-')).getMonth() === currentMonth)
+        semuaLog[pangkalanSheet].filter(row => row.status?.startsWith('Sukses') && new Date(String(row.tanggal_transaksi).split(',')[0].split('/').reverse().join('-')).getMonth() === currentMonth)
             .forEach(row => {
                 const nik = String(row.noKTP);
                 const pangkalanUsage = globalUsageMap.get(nik) || new Map();
-                pangkalanUsage.set(pangkalanSheet, (pangkalanUsage.get(pangkalanSheet) || 0) + 1);
+                pangkalanUsage.set(pangkalanSheet, (pangkalanUsage.get(pangkalanSheet) || 0) + (row.quantity || 1));
                 globalUsageMap.set(nik, pangkalanUsage);
             });
     }
 
     console.log(chalk.blue("\n2. Melakukan filter cepat berdasarkan data tersimpan..."));
     const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
-    
     let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
-        const nik = String(pelanggan.noKTP);
-        const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
+        const usageDiPangkalanIni = globalUsageMap.get(String(pelanggan.noKTP))?.get(sheetName) || 0;
         const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
-        
         let lolosJarakHari = false;
         const tglTerakhir = pelanggan.tanggal_terakhir_transaksi;
-
         if (!tglTerakhir || tglTerakhir === 'Belum Pernah Transaksi') {
             lolosJarakHari = true;
         } else {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            
-            // Parsing tanggal yang lebih kuat
+            const today = new Date(); today.setHours(0, 0, 0, 0);
             const datePart = String(tglTerakhir).split(',')[0].trim();
             const lastTxDate = new Date(datePart.split('/').reverse().join('-'));
             lastTxDate.setHours(0, 0, 0, 0);
-
-            if (isNaN(lastTxDate.getTime())) { // Jika parsing gagal
-                lolosJarakHari = true; // Anggap lolos agar bisa diverifikasi ulang
-            } else {
-                const selisihMillis = today.getTime() - lastTxDate.getTime();
-                const selisihHari = Math.floor(selisihMillis / (1000 * 60 * 60 * 24));
-
-                if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) {
-                    lolosJarakHari = true;
-                }
+            if (!isNaN(lastTxDate.getTime())) {
+                const selisihHari = Math.floor((today.getTime() - lastTxDate.getTime()) / (1000 * 60 * 60 * 24));
+                if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) lolosJarakHari = true;
             }
         }
-        
         const lolosKuotaCache = !(typeof pelanggan.monthly === 'number' && pelanggan.monthly <= 0);
         return usageDiPangkalanIni < limitPangkalan && lolosKuotaCache && lolosJarakHari;
     });
     console.log(chalk.gray(`   > Ditemukan ${kandidatPelanggan.length} kandidat awal.`));
     
-    kandidatPelanggan.sort((a, b) => {
-        const tglA = a.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(String(a.tanggal_terakhir_transaksi).split(',')[0].split('/').reverse().join('-')).getTime();
-        const tglB = b.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(String(b.tanggal_terakhir_transaksi).split(',')[0].split('/').reverse().join('-')).getTime();
-        return tglA - tglB;
-    });
-    
+    // --- Logika Verifikasi API (Sama) ---
     const limitVerifikasi = Math.ceil(totalStock * config.aturanBisnis.faktor_buffer_kandidat);
     const kandidatTeratas = kandidatPelanggan.slice(0, limitVerifikasi);
-    
     console.log(chalk.blue(`\n3. Memprioritaskan dan memilih ${kandidatTeratas.length} kandidat terbaik untuk diverifikasi API...`));
     const eligibleCustomers = [];
     const progressBar = ui.buatProgressBar('Update Cerdas');
     progressBar.start(kandidatTeratas.length, 0);
-
     for (const [index, pelanggan] of kandidatTeratas.entries()) {
         progressBar.increment();
         const nik = String(pelanggan.noKTP);
-
         let isDataFresh = false;
         if (pelanggan.terakhir_dicek) {
-            const lastCheckedDate = new Date(pelanggan.terakhir_dicek);
-            if (!isNaN(lastCheckedDate)) {
-                const hoursDiff = (new Date() - lastCheckedDate) / (1000 * 60 * 60);
-                if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) {
-                    isDataFresh = true;
-                }
-            }
+            const hoursDiff = (new Date() - new Date(pelanggan.terakhir_dicek)) / 36e5;
+            if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) isDataFresh = true;
         }
-
         if (isDataFresh) {
-            if (pelanggan.monthly > 0) {
-                eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
-            }
+            if (pelanggan.monthly > 0) eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
         } else {
             const verificationData = await api.getVerificationData(nik, token);
             if (verificationData) {
                 const quota = await api.getQuota(nik, verificationData, token);
                 if (quota) {
-                    pelanggan.daily = quota.daily; 
-                    pelanggan.monthly = quota.monthly;
-                    pelanggan.family = quota.family; 
-                    pelanggan.all = quota.all;
+                    pelanggan.daily = quota.daily; pelanggan.monthly = quota.monthly; pelanggan.family = quota.family; pelanggan.all = quota.all;
                     pelanggan.terakhir_dicek = new Date().toISOString();
-                    
-                    if (quota.monthly > 0) {
-                        eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
-                    }
+                    if (quota.monthly > 0) eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
                 }
             }
-            if (index < kandidatTeratas.length - 1) {
-                await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
-            }
+            if (index < kandidatTeratas.length - 1) await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
         }
     }
     progressBar.stop();
-    
     console.log(chalk.blue("\n4. Menyimpan hasil Pembaruan Cerdas ke Master Pelanggan..."));
     excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
 
@@ -455,19 +398,49 @@ async function buatRencanaTransaksi(token, profile) {
         console.log(chalk.yellow("\nTidak ditemukan pelanggan yang memenuhi syarat setelah verifikasi API."));
         return;
     }
-    
-    eligibleCustomers.sort((a, b) => a.usage - b.usage);
-    const pelangganTerpilih = eligibleCustomers.slice(0, totalStock).map(p => ({
-        noKTP: p.noKTP,
-        nama: p.nama,
-        customerTypes: p.customerTypes,
-        quantity: 1,
-        sisa_kuota_harian: p.daily,
-        sisa_kuota_bulanan: p.monthly,
-        sisa_kuota_keluarga: p.family
-    }));
 
-    console.log(chalk.green(`\n5. Berhasil menemukan ${eligibleCustomers.length} pelanggan, ${pelangganTerpilih.length} dipilih untuk rencana.`));
+    // --- BLOK BARU: PENGISIAN RENCANA DENGAN KUANTITAS DINAMIS ---
+    console.log(chalk.blue("\n5. Menyusun rencana transaksi dengan kuantitas dinamis..."));
+    
+    // Prioritaskan Usaha Mikro, lalu urutkan berdasarkan yang paling jarang bertransaksi
+    eligibleCustomers.sort((a, b) => {
+        if (a.customerTypes === 'Usaha Mikro' && b.customerTypes !== 'Usaha Mikro') return -1;
+        if (a.customerTypes !== 'Usaha Mikro' && b.customerTypes === 'Usaha Mikro') return 1;
+        const tglA = a.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(String(a.tanggal_terakhir_transaksi).split(',')[0].split('/').reverse().join('-')).getTime();
+        const tglB = b.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(String(b.tanggal_terakhir_transaksi).split(',')[0].split('/').reverse().join('-')).getTime();
+        return tglA - tglB;
+    });
+
+    const pelangganTerpilih = [];
+    let stockTerpakai = 0;
+    for (const p of eligibleCustomers) {
+        if (stockTerpakai >= totalStock) break;
+
+        const kuantitasDefault = (p.customerTypes === 'Usaha Mikro') ? 5 : 1;
+        
+        // Kuantitas yang bisa diambil adalah nilai terkecil dari:
+        // 1. Kuantitas default sesuai tipe pelanggan
+        // 2. Sisa stok yang akan didistribusikan
+        // 3. Sisa kuota harian pelanggan
+        // 4. Sisa kuota bulanan pelanggan
+        const kuantitasDapatDiambil = Math.min(kuantitasDefault, (totalStock - stockTerpakai), p.daily, p.monthly);
+
+        if (kuantitasDapatDiambil > 0) {
+            pelangganTerpilih.push({
+                noKTP: p.noKTP,
+                nama: p.nama,
+                customerTypes: p.customerTypes,
+                quantity: kuantitasDapatDiambil, // Kuantitas dinamis
+                sisa_kuota_harian: p.daily,
+                sisa_kuota_bulanan: p.monthly,
+                sisa_kuota_keluarga: p.family
+            });
+            stockTerpakai += kuantitasDapatDiambil;
+        }
+    }
+    // --- BLOK BARU SELESAI ---
+
+    console.log(chalk.green(`\n6. Berhasil menemukan ${eligibleCustomers.length} pelanggan, ${pelangganTerpilih.length} dipilih untuk rencana dengan total ${stockTerpakai} tabung.`));
     excel.tulisLog(config.filePaths.rencanaTransaksi, xlsx.utils.book_new(), "Rencana", pelangganTerpilih);
     
     console.log(chalk.bold.green(`\n✅ File "${config.filePaths.rencanaTransaksi}" berhasil dibuat.`));
@@ -536,7 +509,7 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
     const usageMap = new Map();
     historicalData
         .filter(row => row.status?.startsWith('Sukses') && new Date(String(row.tanggal_transaksi).split(',')[0].split('/').reverse().join('-')).getMonth() === currentMonth)
-        .forEach(row => usageMap.set(String(row.noKTP), (usageMap.get(String(row.noKTP)) || 0) + 1));
+        .forEach(row => usageMap.set(String(row.noKTP), (usageMap.get(String(row.noKTP)) || 0) + (row.quantity || 1)));
 
     let currentStock = productInfo.stockAvailable;
     const summary = { 'Sukses': 0, 'Gagal (Verifikasi)': 0, 'Gagal (Transaksi)': 0, 'Dilewati (Batas/Stok/Format)': 0, 'Sukses (Pengganti)': 0, 'Gagal (Pengganti)': 0 };
@@ -545,7 +518,8 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
 
     const processSingleTransaction = async (user, isReplacement = false) => {
         const nik = String(user.noKTP);
-        const quantity = user.quantity || 1;
+        // Kuantitas dari file rencana, atau 1 jika manual/pengganti tanpa kuantitas
+        const quantity = user.quantity || 1; 
         
         const resultRow = {
             noKTP: nik, nama: 'Akan diverifikasi', customerTypes: 'Akan diverifikasi', status: 'Belum diproses',
@@ -583,7 +557,7 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
             if (isReplacement) summary['Sukses (Pengganti)']++; else summary.Sukses++;
             
             currentStock -= quantity;
-            usageMap.set(nik, (usageMap.get(nik) || 0) + 1);
+            usageMap.set(nik, (usageMap.get(nik) || 0) + quantity);
             
             const pelangganDiMaster = dataPelanggan.find(p => String(p.noKTP) === nik);
             if (pelangganDiMaster) {
@@ -619,15 +593,32 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
     for (const [index, user] of dataToInput.entries()) {
         progressBar.increment();
         const success = await processSingleTransaction(user, false);
+        
+        // --- BLOK MODIFIKASI UNTUK PENGGANTI ---
         if (!success && isModeCerdas) {
             if (kandidatPengganti.length > 0) {
                 const pengganti = kandidatPengganti.shift();
-                console.log(chalk.cyan(`\n   > Transaksi gagal, mencoba pengganti: ${pengganti.noKTP} (${pengganti.nama})`));
-                await processSingleTransaction(pengganti, true);
+                
+                // Menentukan kuantitas default untuk pengganti
+                const kuantitasPengganti = (pengganti.customerTypes === 'Usaha Mikro') ? 5 : 1;
+                // Pastikan kuantitas tidak melebihi stok sisa dan kuota pelanggan pengganti
+                const kuantitasFinal = Math.min(kuantitasPengganti, currentStock, pengganti.daily || 1, pengganti.monthly || 1);
+
+                if (kuantitasFinal > 0) {
+                    console.log(chalk.cyan(`\n   > Transaksi gagal, mencoba pengganti: ${pengganti.noKTP} (${pengganti.nama}) dengan kuantitas ${kuantitasFinal}`));
+                    // Membuat objek baru untuk pengganti dengan kuantitas yang sudah ditentukan
+                    const penggantiDenganKuantitas = { ...pengganti, quantity: kuantitasFinal };
+                    await processSingleTransaction(penggantiDenganKuantitas, true);
+                } else {
+                     console.log(chalk.red(`\n   > Transaksi gagal, kandidat pengganti ${pengganti.nama} tidak memiliki cukup stok/kuota.`));
+                }
+
             } else {
                 console.log(chalk.red('\n   > Transaksi gagal, tidak ada kandidat pengganti tersisa.'));
             }
         }
+        // --- BLOK MODIFIKASI SELESAI ---
+
         if (currentStock <= 0) {
              progressBar.stop();
              console.log(chalk.red.bold("\n\n🛑 Stok habis, proses dihentikan."));
