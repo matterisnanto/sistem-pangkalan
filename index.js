@@ -1055,27 +1055,64 @@ async function runDiagnosisData(token) {
 }
 
 async function runSearchLocalMaster() {
-    const startTime = Date.now(); // Pindahkan timer ke awal sesi
+    const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Diagnosis] Cari Pelanggan di Master Lokal ---"));
-    
-    let cariLagi = true;
 
+    console.log(chalk.blue("Membaca data Master Pelanggan & Log Transaksi..."));
+    const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan) || [];
+    if (dataPelanggan.length === 0) {
+        console.log(chalk.yellow("File Master Pelanggan kosong atau tidak ditemukan."));
+        return;
+    }
+
+    const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
+    const monthlyUsageMap = new Map();
+    const currentMonth = new Date().getMonth();
+
+    // --- BLOK PERBAIKAN LOGIKA TANGGAL ---
+    for (const sheet in semuaLog) {
+        semuaLog[sheet]
+            .filter(row => row.status?.startsWith('Sukses'))
+            .forEach(row => {
+                // Logika parsing tanggal yang lebih kuat
+                const dateString = String(row.tanggal_transaksi).split(' ')[0].replace(',', '');
+                const dateParts = dateString.split('/');
+                if (dateParts.length === 3) {
+                    const trxDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`);
+                    if (!isNaN(trxDate.getTime()) && trxDate.getMonth() === currentMonth) {
+                        const nik = String(row.noKTP);
+                        monthlyUsageMap.set(nik, (monthlyUsageMap.get(nik) || 0) + (row.quantity || 1));
+                    }
+                }
+            });
+    }
+    // --- AKHIR BLOK PERBAIKAN ---
+
+    let cariLagi = true;
     while (cariLagi) {
         try {
-            const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan) || [];
-            if (dataPelanggan.length === 0) {
-                console.log(chalk.yellow("File Master Pelanggan kosong atau tidak ditemukan."));
-                return; // Keluar dari fungsi jika master kosong
-            }
             const { nama } = await ui.promptSearchByName();
             const searchInput = nama.trim().toLowerCase();
             const results = dataPelanggan.filter(p => p.nama.trim().toLowerCase().includes(searchInput));
             
             if (results.length > 0) {
                 console.log(chalk.green(`\n✅ Ditemukan ${results.length} hasil untuk pencarian "${nama}":`));
-                const table = new Table({ head: [chalk.cyan('Nama Lengkap di Master'), chalk.cyan('NIK Lengkap di Master')] });
-                results.forEach(p => table.push([p.nama, p.noKTP]));
+                
+                const table = new Table({ 
+                    head: [chalk.cyan('Nama Lengkap'), chalk.cyan('NIK'), chalk.cyan('Terakhir Transaksi'), chalk.cyan('Qty Bulan Ini')] 
+                });
+
+                results.forEach(p => {
+                    const nik = String(p.noKTP);
+                    const qtyBulanIni = monthlyUsageMap.get(nik) || 0;
+                    let tglTerakhir = p.tanggal_terakhir_transaksi || '-';
+                    // Membersihkan tampilan tanggal terakhir
+                    tglTerakhir = tglTerakhir.split(' ')[0].replace(',', '');
+
+                    table.push([p.nama, nik, tglTerakhir, qtyBulanIni]);
+                });
                 console.log(table.toString());
+
             } else {
                 console.log(chalk.red(`\n❌ Tidak ada pelanggan yang cocok dengan pencarian "${nama}" di dalam file master Anda.`));
             }
