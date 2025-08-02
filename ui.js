@@ -1,5 +1,3 @@
-// Nama file: ui.js
-
 const inquirer = require("inquirer");
 const chalk = require("chalk");
 const cliProgress = require("cli-progress");
@@ -25,15 +23,6 @@ const formatWaktuProses = (ms) => {
     if (secs > 0 || parts.length === 0) parts.push(`${secs} detik`);
     return parts.join(' ');
 };
-
-const promptTambahPelangganSatuan = () => inquirerInstance.prompt([
-    {
-        type: 'input',
-        name: 'nik',
-        message: '➡️  Masukkan NIK Pelanggan yang akan ditambahkan (16 digit):',
-        validate: (input) => /^\d{16}$/.test(input) ? true : 'Format NIK salah, harus 16 digit angka.'
-    }
-]);
 
 const dapatkanToken = async () => {
     try {
@@ -76,15 +65,6 @@ const tampilkanDashboard = (profile, productInfo) => {
     console.log(table.toString());
 };
 
-const promptSearchByName = () => inquirerInstance.prompt([
-    {
-        type: 'input',
-        name: 'nama',
-        message: '➡️  Masukkan nama pelanggan yang ingin dicari di Master Pelanggan:',
-        validate: (input) => input ? true : 'Nama tidak boleh kosong.'
-    }
-]);
-
 const tampilkanMenuUtama = () => inquirerInstance.prompt([{
     type: 'list', name: 'menuChoice', message: 'Pilih tindakan:',
     choices: [
@@ -102,7 +82,7 @@ const tampilkanMenuUtama = () => inquirerInstance.prompt([{
         { name: '10. Sinkronisasi & Laporan Penjualan', value: '10' },
         { name: '11. Buat File Template Input', value: '11' },
         { name: '12. Cek & Perbaiki Data Pelanggan', value: '12' },
-        { name: '13. Cari Pelanggan di Master Lokal', value: '13' }, // <--- MENU DIAGNOSIS BARU
+        { name: '13. Cari Pelanggan di Master Lokal', value: '13' },
         new inquirerInstance.Separator(),
         { name: '14. Ganti Token / Pangkalan', value: '14' },
         { name: '15. Keluar', value: '15' },
@@ -125,7 +105,6 @@ const promptPilihRentangTanggal = async () => {
         yesterday.setDate(yesterday.getDate() - 1);
         return { startDate: yesterday, endDate: yesterday };
     }
-    // Pilihan Tanggal Kustom
     const { tglMulai, tglSelesai } = await inquirerInstance.prompt([
         { type: 'input', name: 'tglMulai', message: 'Masukkan Tanggal Mulai (YYYY-MM-DD):', validate: input => /\d{4}-\d{2}-\d{2}/.test(input) ? true : "Format salah." },
         { type: 'input', name: 'tglSelesai', message: 'Masukkan Tanggal Selesai (YYYY-MM-DD):', validate: input => /\d{4}-\d{2}-\d{2}/.test(input) ? true : "Format salah." }
@@ -135,17 +114,18 @@ const promptPilihRentangTanggal = async () => {
 
 const promptTransaksiLangsung = async () => {
     return inquirerInstance.prompt([
-        {
-            type: 'input', name: 'nik', message: '➡️ Masukkan NIK Pelanggan (16 digit):',
-            validate: (input) => /^\d{16}$/.test(input) ? true : 'Format NIK salah, harus 16 digit angka.'
-        },
-        {
-            type: 'number', name: 'quantity', message: '➡️ Masukkan Jumlah Pembelian (quantity):',
-            default: 1,
-            validate: (input) => input > 0 ? true : 'Jumlah harus lebih dari 0.'
-        }
+        { type: 'input', name: 'nik', message: '➡️ Masukkan NIK Pelanggan (16 digit):', validate: (input) => /^\d{16}$/.test(input) ? true : 'Format NIK salah, harus 16 digit angka.' },
+        { type: 'number', name: 'quantity', message: '➡️ Masukkan Jumlah Pembelian (quantity):', default: 1, validate: (input) => input > 0 ? true : 'Jumlah harus lebih dari 0.' }
     ]);
 };
+
+const promptTambahPelangganSatuan = () => inquirerInstance.prompt([
+    { type: 'input', name: 'nik', message: '➡️  Masukkan NIK Pelanggan yang akan ditambahkan (16 digit):', validate: (input) => /^\d{16}$/.test(input) ? true : 'Format NIK salah, harus 16 digit angka.' }
+]);
+
+const promptSearchByName = () => inquirerInstance.prompt([
+    { type: 'input', name: 'nama', message: '➡️  Masukkan nama pelanggan yang ingin dicari di Master Pelanggan:', validate: (input) => input ? true : 'Nama tidak boleh kosong.' }
+]);
 
 const buatProgressBar = (pesan = 'Proses') => new cliProgress.SingleBar({
     format: `${pesan} |${chalkInstance.cyan('{bar}')}| {percentage}% || {value}/{total} Data`,
@@ -187,5 +167,6 @@ const tampilkanTabelLaporan = (sortedData) => {
 module.exports = {
     initializeDependencies, formatWaktuProses, dapatkanToken, tampilkanHeader,
     tampilkanDashboard, tampilkanMenuUtama, buatProgressBar, tampilkanTabelRingkasan,
-    promptTransaksiLangsung,tampilkanTabelLaporan, promptPilihRentangTanggal, tampilkanTabelValidasi, promptTambahPelangganSatuan, tampilkanTabelValidasi, promptTambahPelangganSatuan, promptSearchByName,
+    promptTransaksiLangsung, tampilkanTabelLaporan, promptPilihRentangTanggal, 
+    tampilkanTabelValidasi, promptTambahPelangganSatuan, promptSearchByName, Table,
 };

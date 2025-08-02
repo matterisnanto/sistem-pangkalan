@@ -54,14 +54,11 @@ const getQuota = async (nik, verificationData, token) => {
     try {
         const { familyIdEncrypted, customerTypes } = verificationData;
         const customerType = customerTypes?.[0]?.name;
-
-        // [PERBAIKAN] Pengecekan familyIdEncrypted dihapus karena tidak selalu ada.
-        // Hanya customerType yang wajib.
         if (!customerType) return null;
 
         const { data } = await apiInstance.get(`/general/v4/customers/${nik}/quota`, {
             params: {
-                familyId: familyIdEncrypted || '', // Kirim string kosong jika tidak ada
+                familyId: familyIdEncrypted || '',
                 customerType: customerType
             },
             headers: getHeaders(token),
@@ -87,28 +84,13 @@ const postTransaction = async (payload, token) => {
     return data;
 };
 
-const getMonthlyReport = async (token) => {
-    const today = new Date();
-    const startDate = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
-    const endDate = today.toISOString().split('T')[0];
-    const { data } = await apiInstance.get("/general/v1/transactions/report", {
-        params: { startDate, endDate }, headers: getHeaders(token),
-    });
-    if (!data?.success || !data?.data?.customersReport) {
-        throw new Error("Gagal memuat laporan atau format data tidak sesuai.");
-    }
-    return data.data.customersReport;
-};
-
 const getTransactionsReport = async (token, startDate, endDate) => {
     const { data } = await apiInstance.get("/general/v1/transactions/report", {
         params: { startDate, endDate }, headers: getHeaders(token),
     });
-    // Pengecekan: Pastikan customersReport adalah sebuah array
     if (data?.success && Array.isArray(data?.data?.customersReport)) {
-        return data.data.customersReport; // Kembalikan array jika valid
+        return data.data.customersReport;
     } else {
-        // Jika tidak valid, kembalikan array kosong untuk mencegah error
         console.log(chalk.yellow(`\n   > Peringatan: Tidak ada data ringkasan laporan (customersReport) dari server.`));
         return [];
     }
@@ -118,11 +100,9 @@ const getTransactionsByCustomer = async (token, startDate, endDate, customerRepo
     const { data } = await apiInstance.get("/general/v1/transactions", {
         params: { startDate, endDate, customerReportId }, headers: getHeaders(token),
     });
-    // Pengecekan: Pastikan data.data.data adalah sebuah array
     if (data?.success && Array.isArray(data?.data?.data)) {
-        return data.data.data; // Kembalikan array jika valid
+        return data.data.data;
     } else {
-        // Jika tidak valid, kembalikan array kosong untuk mencegah error 'length'
         console.log(chalk.yellow(`\n   > Peringatan: Tidak ada data transaksi array untuk customerReportId ${customerReportId}. Melanjutkan...`));
         return []; 
     }
@@ -139,6 +119,6 @@ const getTransactionDetail = async (token, transactionId) => {
 };
 
 module.exports = {
-    getProfileInfo, getProducts, getVerificationData, getQuota, postTransaction, getMonthlyReport,
+    getProfileInfo, getProducts, getVerificationData, getQuota, postTransaction,
     getTransactionsReport, getTransactionsByCustomer, getTransactionDetail,
 };

@@ -1,5 +1,3 @@
-// Nama file: excel.js
-
 const xlsx = require("xlsx");
 const fs = require("fs");
 const chalk = require("chalk");
@@ -13,10 +11,11 @@ const bacaFile = (filePath) => {
         const targetSheetName = "Pelanggan";
         let worksheet = workbook.Sheets[targetSheetName];
 
-        // Jika sheet "Pelanggan" tidak ada, coba baca dari sheet pertama sebagai fallback
         if (!worksheet) {
             const firstSheetName = workbook.SheetNames[0];
-            console.log(chalk.yellow(`\n   > Peringatan: Sheet "${targetSheetName}" tidak ditemukan di ${filePath}. Membaca dari sheet pertama: "${firstSheetName}".`));
+            if (filePath.includes('MASTER_PELANGGAN')) {
+                 console.log(chalk.yellow(`\n   > Peringatan: Sheet "${targetSheetName}" tidak ditemukan di ${filePath}. Membaca dari sheet pertama: "${firstSheetName}".`));
+            }
             worksheet = workbook.Sheets[firstSheetName];
         }
 
@@ -30,9 +29,6 @@ const bacaFile = (filePath) => {
     }
 };
 
-/**
- * Membaca satu sheet spesifik dari file log.
- */
 const bacaLog = (filePath, sheetName) => {
     let data = [];
     let workbook;
