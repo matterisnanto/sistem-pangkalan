@@ -232,7 +232,7 @@ async function buatRencanaTransaksi(token, profile) {
     const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Cerdas] Membuat Rencana Transaksi Harian ---"));
     
-    // --- Blok Sinkronisasi Internal (dari perbaikan sebelumnya) ---
+    // Blok Sinkronisasi Internal (Tidak perlu diubah)
     try {
         console.log(chalk.bold.magenta("\n--- Langkah A: Sinkronisasi Data Otomatis ---"));
         const today = new Date();
@@ -315,13 +315,14 @@ async function buatRencanaTransaksi(token, profile) {
         console.log(chalk.yellow("   Melanjutkan proses dengan data lokal yang ada..."));
     }
     
-    // --- Logika Pembuatan Rencana (Bagian yang sama seperti sebelumnya) ---
     const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan);
     if (!dataPelanggan || dataPelanggan.length === 0) {
         console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan atau kosong.`));
         return;
     }
     const { totalStock } = await inquirer.prompt([{ type: 'number', name: 'totalStock', message: `Masukkan total stok yang akan didistribusikan untuk ${chalk.cyan(profile.storeName)}:`, validate: (input) => input > 0 ? true : "Jumlah stok harus lebih dari 0." }]);
+    
+    // Proses filter kandidat (tidak perlu diubah)
     console.log(chalk.blue("\n1. Membaca data transaksi bulan ini dari log yang sudah sinkron..."));
     const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
     const globalUsageMap = new Map();
@@ -360,7 +361,6 @@ async function buatRencanaTransaksi(token, profile) {
     });
     console.log(chalk.gray(`   > Ditemukan ${kandidatPelanggan.length} kandidat awal.`));
     
-    // --- Logika Verifikasi API (Sama) ---
     const limitVerifikasi = Math.ceil(totalStock * config.aturanBisnis.faktor_buffer_kandidat);
     const kandidatTeratas = kandidatPelanggan.slice(0, limitVerifikasi);
     console.log(chalk.blue(`\n3. Memprioritaskan dan memilih ${kandidatTeratas.length} kandidat terbaik untuk diverifikasi API...`));
@@ -399,10 +399,9 @@ async function buatRencanaTransaksi(token, profile) {
         return;
     }
 
-    // --- BLOK BARU: PENGISIAN RENCANA DENGAN KUANTITAS DINAMIS ---
-    console.log(chalk.blue("\n5. Menyusun rencana transaksi dengan kuantitas dinamis..."));
+    // --- BLOK BARU: LOGIKA DUA TAHAP UNTUK KUANTITAS 1 ATAU 2 ---
+    console.log(chalk.blue("\n5. Menyusun rencana transaksi dengan kuantitas dinamis (Tahap 1 & 2)..."));
     
-    // Prioritaskan Usaha Mikro, lalu urutkan berdasarkan yang paling jarang bertransaksi
     eligibleCustomers.sort((a, b) => {
         if (a.customerTypes === 'Usaha Mikro' && b.customerTypes !== 'Usaha Mikro') return -1;
         if (a.customerTypes !== 'Usaha Mikro' && b.customerTypes === 'Usaha Mikro') return 1;
@@ -413,29 +412,37 @@ async function buatRencanaTransaksi(token, profile) {
 
     const pelangganTerpilih = [];
     let stockTerpakai = 0;
+
+    // Tahap 1: Alokasi dasar
     for (const p of eligibleCustomers) {
         if (stockTerpakai >= totalStock) break;
-
         const kuantitasDefault = (p.customerTypes === 'Usaha Mikro') ? 5 : 1;
-        
-        // Kuantitas yang bisa diambil adalah nilai terkecil dari:
-        // 1. Kuantitas default sesuai tipe pelanggan
-        // 2. Sisa stok yang akan didistribusikan
-        // 3. Sisa kuota harian pelanggan
-        // 4. Sisa kuota bulanan pelanggan
         const kuantitasDapatDiambil = Math.min(kuantitasDefault, (totalStock - stockTerpakai), p.daily, p.monthly);
 
         if (kuantitasDapatDiambil > 0) {
             pelangganTerpilih.push({
-                noKTP: p.noKTP,
-                nama: p.nama,
-                customerTypes: p.customerTypes,
-                quantity: kuantitasDapatDiambil, // Kuantitas dinamis
-                sisa_kuota_harian: p.daily,
-                sisa_kuota_bulanan: p.monthly,
-                sisa_kuota_keluarga: p.family
+                noKTP: p.noKTP, nama: p.nama, customerTypes: p.customerTypes,
+                quantity: kuantitasDapatDiambil, sisa_kuota_harian: p.daily,
+                sisa_kuota_bulanan: p.monthly, sisa_kuota_keluarga: p.family
             });
             stockTerpakai += kuantitasDapatDiambil;
+        }
+    }
+
+    // Tahap 2: Alokasi tambahan untuk Rumah Tangga jika ada sisa stok
+    let sisaStok = totalStock - stockTerpakai;
+    if (sisaStok > 0) {
+        for (const pelanggan of pelangganTerpilih) {
+            if (sisaStok <= 0) break;
+            // Hanya targetkan Rumah Tangga yang kuantitasnya masih 1
+            if (pelanggan.customerTypes === 'Rumah Tangga' && pelanggan.quantity === 1) {
+                // Pastikan pelanggan masih punya kuota untuk tabung kedua
+                if (pelanggan.sisa_kuota_harian > 1 && pelanggan.sisa_kuota_bulanan > 1) {
+                    pelanggan.quantity += 1;
+                    stockTerpakai += 1;
+                    sisaStok -= 1;
+                }
+            }
         }
     }
     // --- BLOK BARU SELESAI ---
@@ -518,8 +525,7 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
 
     const processSingleTransaction = async (user, isReplacement = false) => {
         const nik = String(user.noKTP);
-        // Kuantitas dari file rencana, atau 1 jika manual/pengganti tanpa kuantitas
-        const quantity = user.quantity || 1; 
+        const quantity = user.quantity || 1;
         
         const resultRow = {
             noKTP: nik, nama: 'Akan diverifikasi', customerTypes: 'Akan diverifikasi', status: 'Belum diproses',
@@ -543,7 +549,7 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
             resultRow.customerTypes = custType;
             
             const monthlyLimit = (custType === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
-            if ((usageMap.get(nik) || 0) >= monthlyLimit) throw new Error(`Batas ${monthlyLimit} trx/bulan tercapai`);
+            if ((usageMap.get(nik) || 0) + quantity > monthlyLimit) throw new Error(`Batas ${monthlyLimit} trx/bulan akan terlampaui`);
             
             const payload = {
                 products: [{ productId: productInfo.productId, quantity }], token: verificationData.token,
@@ -594,30 +600,34 @@ async function runTransactionInputProcess(token, profile, dataDariRencana = null
         progressBar.increment();
         const success = await processSingleTransaction(user, false);
         
-        // --- BLOK MODIFIKASI UNTUK PENGGANTI ---
+        // --- BLOK PERBAIKAN UNTUK KUANTITAS PENGGANTI ---
         if (!success && isModeCerdas) {
+            const failedQuantity = user.quantity || 1; // Kuantitas yang gagal dieksekusi
+
             if (kandidatPengganti.length > 0) {
                 const pengganti = kandidatPengganti.shift();
                 
-                // Menentukan kuantitas default untuk pengganti
-                const kuantitasPengganti = (pengganti.customerTypes === 'Usaha Mikro') ? 5 : 1;
-                // Pastikan kuantitas tidak melebihi stok sisa dan kuota pelanggan pengganti
-                const kuantitasFinal = Math.min(kuantitasPengganti, currentStock, pengganti.daily || 1, pengganti.monthly || 1);
+                // Kuantitas final adalah nilai terkecil dari kuantitas yang gagal, stok, dan kuota pengganti
+                const kuantitasFinal = Math.min(
+                    failedQuantity, 
+                    currentStock, 
+                    pengganti.daily || 1, 
+                    pengganti.monthly || 1
+                );
 
                 if (kuantitasFinal > 0) {
-                    console.log(chalk.cyan(`\n   > Transaksi gagal, mencoba pengganti: ${pengganti.noKTP} (${pengganti.nama}) dengan kuantitas ${kuantitasFinal}`));
-                    // Membuat objek baru untuk pengganti dengan kuantitas yang sudah ditentukan
+                    console.log(chalk.cyan(`\n   > Transaksi untuk ${user.nama} (qty: ${failedQuantity}) gagal. Mencoba pengganti: ${pengganti.nama} dengan kuantitas ${kuantitasFinal}`));
                     const penggantiDenganKuantitas = { ...pengganti, quantity: kuantitasFinal };
                     await processSingleTransaction(penggantiDenganKuantitas, true);
                 } else {
-                     console.log(chalk.red(`\n   > Transaksi gagal, kandidat pengganti ${pengganti.nama} tidak memiliki cukup stok/kuota.`));
+                     console.log(chalk.red(`\n   > Transaksi gagal. Kandidat pengganti ${pengganti.nama} tidak memiliki cukup stok/kuota untuk mengambil alih ${failedQuantity} tabung.`));
                 }
 
             } else {
                 console.log(chalk.red('\n   > Transaksi gagal, tidak ada kandidat pengganti tersisa.'));
             }
         }
-        // --- BLOK MODIFIKASI SELESAI ---
+        // --- BLOK PERBAIKAN SELESAI ---
 
         if (currentStock <= 0) {
              progressBar.stop();
