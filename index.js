@@ -357,18 +357,22 @@ async function buatRencanaTransaksi(token, profile) {
         const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
         let lolosJarakHari = false;
         const tglTerakhir = pelanggan.tanggal_terakhir_transaksi;
-        if (!tglTerakhir || tglTerakhir === 'Belum Pernah Transaksi') {
-            lolosJarakHari = true;
+        const tglTerakhirDiPangkalanIni = lastTxDateMap.get(nik)?.get(sheetName);
+
+        if (!tglTerakhirDiPangkalanIni) {
+            lolosJarakHari = true; // Loloskan jika belum pernah transaksi di pangkalan ini
         } else {
-            const today = new Date(); today.setHours(0, 0, 0, 0);
-            const datePart = String(tglTerakhir).split(',')[0].trim();
-            const lastTxDate = new Date(datePart.split('/').reverse().join('-'));
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const lastTxDate = new Date(tglTerakhirDiPangkalanIni.split(',')[0].split('/').reverse().join('-'));
             lastTxDate.setHours(0, 0, 0, 0);
-            if (!isNaN(lastTxDate.getTime())) {
-                const selisihHari = Math.floor((today.getTime() - lastTxDate.getTime()) / (1000 * 60 * 60 * 24));
-                if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) lolosJarakHari = true;
+
+            const selisihHari = Math.floor((today - lastTxDate) / (1000 * 60 * 60 * 24));
+            if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) {
+                lolosJarakHari = true;
             }
         }
+        
         const lolosKuotaCache = !(typeof pelanggan.monthly === 'number' && pelanggan.monthly <= 0);
         return usageDiPangkalanIni < limitPangkalan && lolosKuotaCache && lolosJarakHari;
     });
