@@ -60,6 +60,23 @@ async function runBuatMasterPelanggan() {
     console.log(`⏱️  Waktu Proses: ${ui.formatWaktuProses(Date.now() - startTime)}`);
 }
 
+const parseTanggalTransaksi = (tanggalString) => {
+    if (!tanggalString || typeof tanggalString !== 'string') return null;
+    
+    // Ambil bagian tanggal saja (sebelum spasi atau koma pertama)
+    const datePart = tanggalString.split(' ')[0].split(',')[0];
+    const parts = datePart.split('/');
+    
+    // Pastikan formatnya DD/MM/YYYY
+    if (parts.length !== 3) return null; 
+    
+    // Gabungkan kembali ke format YYYY-MM-DD yang aman untuk semua sistem
+    const formattedDateString = `${parts[2]}-${parts[1]}-${parts[0]}`;
+    const dateObj = new Date(formattedDateString);
+
+    // Kembalikan null jika hasilnya tanggal tidak valid
+    return isNaN(dateObj) ? null : dateObj;
+};
 
 async function backupMasterLog() {
     const filePath = config.filePaths.masterLogTransaksi;
@@ -245,131 +262,70 @@ async function buatRencanaTransaksi(token, profile) {
     const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Cerdas] Membuat Rencana Transaksi Harian ---"));
     
-    // Blok Sinkronisasi Internal (Tidak perlu diubah)
-    try {
-        console.log(chalk.bold.magenta("\n--- Langkah A: Sinkronisasi Data Otomatis ---"));
-        const today = new Date();
-        const startDate = new Date(today.getFullYear(), today.getMonth(), 1);
-        const tglMulai = startDate.toISOString().split('T')[0];
-        const tglSelesai = today.toISOString().split('T')[0];
-
-        console.log(chalk.blue("   1. Membaca data Master Pelanggan lokal..."));
-        let dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan) || [];
-        
-        console.log(chalk.blue(`   2. Mengambil laporan dari server untuk bulan ini...`));
-        const serverCustomers = await api.getTransactionsReport(token, tglMulai, tglSelesai);
-        
-        if (serverCustomers.length > 0) {
-            console.log(chalk.blue("   3. Membaca dan menyinkronkan log transaksi lokal..."));
-            const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
-            const { data: localData, workbook } = excel.bacaLog(config.filePaths.masterLogTransaksi, sheetName);
-            const localTransactionIds = new Set(localData.map(row => (row.status || '').match(/ID: ([\w-]+)/)?.[1]).filter(Boolean));
-
-            let transactionsAdded = 0;
-            for (const customer of serverCustomers) {
-                const serverTransactions = await api.getTransactionsByCustomer(token, tglMulai, tglSelesai, customer.customerReportId);
-                for (const tx of serverTransactions) {
-                    if (!localTransactionIds.has(tx.transactionId)) {
-                        const detail = await api.getTransactionDetail(token, tx.transactionId);
-                        const fullNik = detail.subsidi.nik || customer.nationalityId;
-                        
-                        const newLogRow = { noKTP: fullNik, nama: detail.subsidi.nama, customerTypes: detail.subsidi.category, status: `Sukses - ID: ${detail.transactionId}`, tanggal_transaksi: detail.subHeader.date, pangkalan: detail.receipt.storeName, quantity: detail.products[0].rawValue.quantity };
-                        localData.push(newLogRow);
-                        transactionsAdded++;
-                    }
-                }
-            }
-            
-            if (transactionsAdded > 0) {
-                console.log(chalk.green(`      > Ditemukan dan ditambahkan ${transactionsAdded} transaksi baru ke log.`));
-                excel.tulisLog(config.filePaths.masterLogTransaksi, workbook, sheetName, localData);
-
-                const latestTransactionMap = new Map();
-                for(const trx of localData){
-                    if(trx.noKTP && trx.status?.startsWith('Sukses')){
-                        const nik = String(trx.noKTP);
-                        const trxDateStr = String(trx.tanggal_transaksi).split(',')[0].split(' ')[0];
-                        const parts = trxDateStr.split('/');
-                        let trxDate = parts.length === 3 ? new Date(`${parts[2]}-${parts[1]}-${parts[0]}`) : new Date(trx.tanggal_transaksi);
-
-                        if(!isNaN(trxDate.getTime())){
-                            const existing = latestTransactionMap.get(nik);
-                            if(!existing || trxDate > existing.date){
-                                latestTransactionMap.set(nik, { date: trxDate, dateString: trx.tanggal_transaksi });
-                            }
-                        }
-                    }
-                }
-                
-                let masterPelangganUpdated = false;
-                for(const pelanggan of dataPelanggan){
-                    const nik = String(pelanggan.noKTP);
-                    const latestTrx = latestTransactionMap.get(nik);
-                    if(latestTrx && pelanggan.tanggal_terakhir_transaksi !== latestTrx.dateString){
-                        pelanggan.tanggal_terakhir_transaksi = latestTrx.dateString;
-                        masterPelangganUpdated = true;
-                    }
-                }
-
-                if(masterPelangganUpdated){
-                    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
-                    console.log(chalk.green.bold("      > Master Pelanggan berhasil diperbarui."));
-                }
-            } else {
-                console.log(chalk.green("      > Log transaksi sudah sinkron."));
-            }
-        } else {
-            console.log(chalk.yellow("   > Tidak ada transaksi di server bulan ini untuk disinkronkan."));
-        }
-        console.log(chalk.magenta("--- Sinkronisasi Selesai. Melanjutkan ke Pembuatan Rencana ---\n"));
-
-    } catch (error) {
-        console.log(chalk.red.bold(`\n❌ Gagal melakukan sinkronisasi otomatis: ${error.message}`));
-        console.log(chalk.yellow("   Melanjutkan proses dengan data lokal yang ada..."));
-    }
-    
     const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan);
-    if (!dataPelanggan || dataPelanggan.length === 0) {
-        console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan atau kosong.`));
+    if (!dataPelanggan) {
+        console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan. Jalankan menu "Buat/Update Master Pelanggan" terlebih dahulu.`));
         return;
     }
-    const { totalStock } = await inquirer.prompt([{ type: 'number', name: 'totalStock', message: `Masukkan total stok yang akan didistribusikan untuk ${chalk.cyan(profile.storeName)}:`, validate: (input) => input > 0 ? true : "Jumlah stok harus lebih dari 0." }]);
     
-    // Proses filter kandidat (tidak perlu diubah)
-    console.log(chalk.blue("\n1. Membaca data transaksi bulan ini dari log yang sudah sinkron..."));
+    const { totalStock } = await inquirer.prompt([{
+        type: 'number', name: 'totalStock',
+        message: `Masukkan total stok yang akan didistribusikan untuk ${chalk.cyan(profile.storeName)}:`,
+        validate: (input) => input > 0 ? true : "Jumlah stok harus lebih dari 0."
+    }]);
+
+    console.log(chalk.blue("\n1. Membaca data transaksi bulan ini..."));
     const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
     const globalUsageMap = new Map();
+    const lastTxDateMap = new Map();
     const currentMonth = new Date().getMonth();
+    
     for (const pangkalanSheet in semuaLog) {
-        semuaLog[pangkalanSheet].filter(row => row.status?.startsWith('Sukses') && new Date(String(row.tanggal_transaksi).split(',')[0].split('/').reverse().join('-')).getMonth() === currentMonth)
-            .forEach(row => {
+        semuaLog[pangkalanSheet].forEach(row => {
+            if (row.status?.startsWith('Sukses') && parseTanggalTransaksi(row.tanggal_transaksi)?.getMonth() === currentMonth) {
                 const nik = String(row.noKTP);
+                const tglBaru = parseTanggalTransaksi(row.tanggal_transaksi);
+                
+                // Update Peta Penggunaan Bulanan
                 const pangkalanUsage = globalUsageMap.get(nik) || new Map();
-                pangkalanUsage.set(pangkalanSheet, (pangkalanUsage.get(pangkalanSheet) || 0) + (row.quantity || 1));
+                pangkalanUsage.set(pangkalanSheet, (pangkalanUsage.get(pangkalanSheet) || 0) + 1);
                 globalUsageMap.set(nik, pangkalanUsage);
-            });
+                
+                // Update Peta Tanggal Transaksi Terakhir per Pangkalan
+                const pangkalanDates = lastTxDateMap.get(nik) || new Map();
+                const tglLama = pangkalanDates.get(pangkalanSheet) ? parseTanggalTransaksi(pangkalanDates.get(pangkalanSheet)) : null;
+                if (!tglLama || tglBaru > tglLama) {
+                    pangkalanDates.set(pangkalanSheet, row.tanggal_transaksi);
+                    lastTxDateMap.set(nik, pangkalanDates);
+                }
+            }
+        });
     }
 
     console.log(chalk.blue("\n2. Melakukan filter cepat berdasarkan data tersimpan..."));
     const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
+    
     let kandidatPelanggan = dataPelanggan.filter(pelanggan => {
-        const usageDiPangkalanIni = globalUsageMap.get(String(pelanggan.noKTP))?.get(sheetName) || 0;
+        const nik = String(pelanggan.noKTP);
+        const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
         const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
+        
+        // --- [PERBAIKAN] Logika Jarak Hari sekarang spesifik per pangkalan ---
         let lolosJarakHari = false;
-        const tglTerakhir = pelanggan.tanggal_terakhir_transaksi;
         const tglTerakhirDiPangkalanIni = lastTxDateMap.get(nik)?.get(sheetName);
 
         if (!tglTerakhirDiPangkalanIni) {
-            lolosJarakHari = true; // Loloskan jika belum pernah transaksi di pangkalan ini
+            lolosJarakHari = true; // Lolos jika belum pernah transaksi di pangkalan ini
         } else {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            const lastTxDate = new Date(tglTerakhirDiPangkalanIni.split(',')[0].split('/').reverse().join('-'));
-            lastTxDate.setHours(0, 0, 0, 0);
-
-            const selisihHari = Math.floor((today - lastTxDate) / (1000 * 60 * 60 * 24));
-            if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) {
-                lolosJarakHari = true;
+            const lastTxDate = parseTanggalTransaksi(tglTerakhirDiPangkalanIni);
+            if(lastTxDate) {
+                lastTxDate.setHours(0, 0, 0, 0);
+                const selisihHari = Math.floor((today - lastTxDate) / (1000 * 60 * 60 * 24));
+                if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) {
+                    lolosJarakHari = true;
+                }
             }
         }
         
@@ -393,7 +349,7 @@ async function buatRencanaTransaksi(token, profile) {
             if (hoursDiff < config.aturanBisnis.masaBerlakuCacheKuotaJam) isDataFresh = true;
         }
         if (isDataFresh) {
-            if (pelanggan.monthly > 0) eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
+            if (pelanggan.daily > 0) eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
         } else {
             const verificationData = await api.getVerificationData(nik, token);
             if (verificationData) {
@@ -401,7 +357,7 @@ async function buatRencanaTransaksi(token, profile) {
                 if (quota) {
                     pelanggan.daily = quota.daily; pelanggan.monthly = quota.monthly; pelanggan.family = quota.family; pelanggan.all = quota.all;
                     pelanggan.terakhir_dicek = new Date().toISOString();
-                    if (quota.monthly > 0) eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
+                    if (quota.daily > 0) eligibleCustomers.push({ ...pelanggan, usage: globalUsageMap.get(nik)?.get(sheetName) || 0 });
                 }
             }
             if (index < kandidatTeratas.length - 1) await jeda(config.jeda.cekKuota.minDetik, config.jeda.cekKuota.maksDetik);
@@ -481,19 +437,87 @@ async function eksekusiRencanaTransaksi(token, profile) {
         return;
     }
 
-    console.log(chalk.blue("1. Mempersiapkan daftar pelanggan pengganti..."));
+    console.log(chalk.blue("1. Mempersiapkan daftar pelanggan pengganti yang valid..."));
     const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan) || [];
     const niksDalamRencana = new Set(dataToInput.map(u => String(u.noKTP)));
     
-    let kandidatPengganti = dataPelanggan
-        .filter(p => !niksDalamRencana.has(String(p.noKTP)) && p.monthly > 0)
-        .sort((a, b) => {
-            const tglA = a.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(String(a.tanggal_terakhir_transaksi).split(',')[0].split('/').reverse().join('-')).getTime();
-            const tglB = b.tanggal_terakhir_transaksi === 'Belum Pernah Transaksi' ? 0 : new Date(String(b.tanggal_terakhir_transaksi).split(',')[0].split('/').reverse().join('-')).getTime();
-            return tglA - tglB;
+    // --- [START] Logika Baru untuk Memfilter Kandidat Pengganti ---
+    const { data: semuaLog } = excel.bacaSemuaSheetLog(config.filePaths.masterLogTransaksi);
+    const globalUsageMap = new Map();
+    const lastTxDateMap = new Map();
+    const currentMonth = new Date().getMonth();
+    const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
+
+    // Membangun peta penggunaan dan tanggal transaksi terakhir dari file log
+    for (const pangkalanSheet in semuaLog) {
+        semuaLog[pangkalanSheet].forEach(row => {
+            const trxDate = parseTanggalTransaksi(row.tanggal_transaksi);
+            if (row.status?.startsWith('Sukses') && trxDate) {
+                const nik = String(row.noKTP);
+                
+                // Update Peta Penggunaan Bulanan jika transaksi terjadi di bulan ini
+                if (trxDate.getMonth() === currentMonth) {
+                    const pangkalanUsage = globalUsageMap.get(nik) || new Map();
+                    pangkalanUsage.set(pangkalanSheet, (pangkalanUsage.get(pangkalanSheet) || 0) + (row.quantity || 1));
+                    globalUsageMap.set(nik, pangkalanUsage);
+                }
+                
+                // Update Peta Tanggal Transaksi Terakhir di setiap pangkalan
+                const pangkalanDates = lastTxDateMap.get(nik) || new Map();
+                const tglLama = pangkalanDates.get(pangkalanSheet) ? parseTanggalTransaksi(pangkalanDates.get(pangkalanSheet)) : null;
+                if (!tglLama || trxDate > tglLama) {
+                    pangkalanDates.set(pangkalanSheet, row.tanggal_transaksi);
+                    lastTxDateMap.set(nik, pangkalanDates);
+                }
+            }
         });
-    
-    console.log(chalk.gray(`   > Ditemukan ${kandidatPengganti.length} kandidat pengganti.`));
+    }
+
+    // Filter dan sort kandidat pengganti berdasarkan data aktual
+    let kandidatPengganti = dataPelanggan.filter(pelanggan => {
+        const nik = String(pelanggan.noKTP);
+        
+        // Lewati jika NIK sudah ada di rencana utama
+        if (niksDalamRencana.has(nik)) return false;
+
+        const usageDiPangkalanIni = globalUsageMap.get(nik)?.get(sheetName) || 0;
+        const limitPangkalan = (pelanggan.customerTypes === 'Usaha Mikro') ? config.aturanBisnis.batasUsahaMikro : config.aturanBisnis.batasPerPangkalan;
+        
+        // Validasi jarak hari minimum transaksi
+        let lolosJarakHari = false;
+        const tglTerakhirDiPangkalanIni = lastTxDateMap.get(nik)?.get(sheetName);
+
+        if (!tglTerakhirDiPangkalanIni) {
+            lolosJarakHari = true; // Lolos jika belum pernah transaksi
+        } else {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const lastTxDate = parseTanggalTransaksi(tglTerakhirDiPangkalanIni);
+            if(lastTxDate) {
+                lastTxDate.setHours(0, 0, 0, 0);
+                const selisihHari = Math.floor((today - lastTxDate) / (1000 * 60 * 60 * 24));
+                if (selisihHari >= config.aturanBisnis.jarakHariMinimumTransaksi) {
+                    lolosJarakHari = true;
+                }
+            }
+        }
+        
+        const lolosKuotaCache = !(typeof pelanggan.monthly === 'number' && pelanggan.monthly <= 0);
+        
+        // Pelanggan lolos jika memenuhi semua syarat
+        return usageDiPangkalanIni < limitPangkalan && lolosKuotaCache && lolosJarakHari;
+    }).sort((a, b) => { // Mengurutkan untuk memprioritaskan yang paling lama tidak bertransaksi
+        const tglA_str = lastTxDateMap.get(String(a.noKTP))?.get(sheetName);
+        const tglB_str = lastTxDateMap.get(String(b.noKTP))?.get(sheetName);
+        
+        const tglA = tglA_str ? parseTanggalTransaksi(tglA_str)?.getTime() || 0 : 0;
+        const tglB = tglB_str ? parseTanggalTransaksi(tglB_str)?.getTime() || 0 : 0;
+
+        return tglA - tglB;
+    });
+    // --- [END] Logika Baru ---
+
+    console.log(chalk.gray(`   > Ditemukan ${kandidatPengganti.length} kandidat pengganti yang memenuhi syarat.`));
 
     console.log(chalk.blue("\n2. Memulai eksekusi transaksi..."));
     const { summary } = await runTransactionInputProcess(token, profile, dataToInput, kandidatPengganti);
