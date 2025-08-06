@@ -262,6 +262,86 @@ async function buatRencanaTransaksi(token, profile) {
     const startTime = Date.now();
     console.log(chalk.bold.yellow("\n--- [Cerdas] Membuat Rencana Transaksi Harian ---"));
     
+    try {
+        console.log(chalk.bold.magenta("\n--- Sinkronisasi Data Otomatis ---"));
+        const today = new Date();
+        const startDate = new Date(today.getFullYear(), today.getMonth(), 1);
+        const tglMulai = startDate.toISOString().split('T')[0];
+        const tglSelesai = today.toISOString().split('T')[0];
+        let dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan) || [];
+        
+        console.log(chalk.blue(`   Mengambil laporan dari server untuk bulan ini...`));
+        const serverCustomers = await api.getTransactionsReport(token, tglMulai, tglSelesai);
+        
+        if (serverCustomers.length > 0) {
+            console.log(chalk.blue("   Membaca dan menyinkronkan log transaksi lokal..."));
+            const sheetName = profile.storeName.replace(/[\\/*?:"\[\]]/g, '').substring(0, 31);
+            const { data: localData, workbook } = excel.bacaLog(config.filePaths.masterLogTransaksi, sheetName);
+            const localTransactionIds = new Set(localData.map(row => (row.status || '').match(/ID: ([\w-]+)/)?.[1]).filter(Boolean));
+
+            let transactionsAdded = 0;
+            for (const customer of serverCustomers) {
+                const serverTransactions = await api.getTransactionsByCustomer(token, tglMulai, tglSelesai, customer.customerReportId);
+                for (const tx of serverTransactions) {
+                    if (!localTransactionIds.has(tx.transactionId)) {
+                        const detail = await api.getTransactionDetail(token, tx.transactionId);
+                        const fullNik = detail.subsidi.nik || customer.nationalityId;
+                        
+                        const newLogRow = { noKTP: fullNik, nama: detail.subsidi.nama, customerTypes: detail.subsidi.category, status: `Sukses - ID: ${detail.transactionId}`, tanggal_transaksi: detail.subHeader.date, pangkalan: detail.receipt.storeName, quantity: detail.products[0].rawValue.quantity };
+                        localData.push(newLogRow);
+                        transactionsAdded++;
+                    }
+                }
+            }
+            
+            if (transactionsAdded > 0) {
+                console.log(chalk.green(`      > Ditemukan dan ditambahkan ${transactionsAdded} transaksi baru ke log.`));
+                excel.tulisLog(config.filePaths.masterLogTransaksi, workbook, sheetName, localData);
+
+                const latestTransactionMap = new Map();
+                for(const trx of localData){
+                    if(trx.noKTP && trx.status?.startsWith('Sukses')){
+                        const nik = String(trx.noKTP);
+                        const trxDateStr = String(trx.tanggal_transaksi).split(',')[0].split(' ')[0];
+                        const parts = trxDateStr.split('/');
+                        let trxDate = parts.length === 3 ? new Date(`${parts[2]}-${parts[1]}-${parts[0]}`) : new Date(trx.tanggal_transaksi);
+
+                        if(!isNaN(trxDate.getTime())){
+                            const existing = latestTransactionMap.get(nik);
+                            if(!existing || trxDate > existing.date){
+                                latestTransactionMap.set(nik, { date: trxDate, dateString: trx.tanggal_transaksi });
+                            }
+                        }
+                    }
+                }
+                
+                let masterPelangganUpdated = false;
+                for(const pelanggan of dataPelanggan){
+                    const nik = String(pelanggan.noKTP);
+                    const latestTrx = latestTransactionMap.get(nik);
+                    if(latestTrx && pelanggan.tanggal_terakhir_transaksi !== latestTrx.dateString){
+                        pelanggan.tanggal_terakhir_transaksi = latestTrx.dateString;
+                        masterPelangganUpdated = true;
+                    }
+                }
+
+                if(masterPelangganUpdated){
+                    excel.tulisLog(config.filePaths.masterPelanggan, xlsx.utils.book_new(), "Pelanggan", dataPelanggan);
+                    console.log(chalk.green.bold("      > Master Pelanggan berhasil diperbarui."));
+                }
+            } else {
+                console.log(chalk.green("      > Log transaksi sudah sinkron."));
+            }
+        } else {
+            console.log(chalk.yellow("   > Tidak ada transaksi di server bulan ini untuk disinkronkan."));
+        }
+        console.log(chalk.magenta("--- Sinkronisasi Selesai. Melanjutkan ke Pembuatan Rencana ---\n"));
+
+    } catch (error) {
+        console.log(chalk.red.bold(`\n❌ Gagal melakukan sinkronisasi otomatis: ${error.message}`));
+        console.log(chalk.yellow("   Melanjutkan proses dengan data lokal yang ada..."));
+    }
+
     const dataPelanggan = excel.bacaFile(config.filePaths.masterPelanggan);
     if (!dataPelanggan) {
         console.log(chalk.red.bold(`\n❌ File master pelanggan tidak ditemukan. Jalankan menu "Buat/Update Master Pelanggan" terlebih dahulu.`));
